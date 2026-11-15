@@ -18,7 +18,7 @@ import { Text, TextInput } from '@/components/ui/text';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { SchoolPicker } from '@/components/school-picker';
 import { GRADES, schoolLevelOf } from '@/constants/schools';
-import { saveProfile, useProfile, type Profile } from '@/hooks/use-profile';
+import { deleteMyAccount, saveProfile, useProfile, type Profile } from '@/hooks/use-profile';
 
 const ORANGE = '#FFA51F';
 const NICKNAME_MAX = 12;
@@ -76,6 +76,7 @@ export default function ProfileSettingsScreen() {
   const [draft, setDraft] = useState<Profile>(profile);
   const [saving, setSaving] = useState(false);
   const [pickingSchool, setPickingSchool] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const grades = GRADES[schoolLevelOf(draft.school)];
 
   const set = <K extends keyof Profile>(key: K, value: Profile[K]) =>
@@ -123,6 +124,23 @@ export default function ProfileSettingsScreen() {
       setSaving(false);
     }
   };
+
+  const withdraw = () =>
+    confirm(
+      '회원 탈퇴',
+      '계정과 프로필, 모든 라이딩 기록과 땅이 바로 삭제되고 되돌릴 수 없어요. 탈퇴할까요?',
+      async () => {
+        setDeleting(true);
+        try {
+          // 탈퇴되면 로그인 화면으로 자동 이동
+          await deleteMyAccount();
+        } catch (e) {
+          Alert.alert('탈퇴 실패', e instanceof Error ? e.message : '잠시 후 다시 시도해 주세요.');
+          setDeleting(false);
+        }
+      },
+      '탈퇴',
+    );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -224,6 +242,10 @@ export default function ProfileSettingsScreen() {
           >
             <Text style={styles.saveButtonText}>{saving ? '저장 중…' : '저장하기'}</Text>
           </Pressable>
+
+          <Pressable onPress={withdraw} disabled={deleting} hitSlop={8} style={styles.withdraw}>
+            <Text style={styles.withdrawText}>{deleting ? '탈퇴 처리 중…' : '회원 탈퇴'}</Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
 
@@ -258,6 +280,16 @@ export default function ProfileSettingsScreen() {
 }
 
 const styles = StyleSheet.create({
+  withdraw: {
+    alignSelf: 'center',
+    marginTop: 28,
+    paddingVertical: 6,
+  },
+  withdrawText: {
+    color: '#6A6A6A',
+    fontSize: 13,
+    textDecorationLine: 'underline',
+  },
   container: {
     flex: 1,
     backgroundColor: '#000000',

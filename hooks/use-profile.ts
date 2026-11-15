@@ -1,6 +1,7 @@
 import { File } from 'expo-file-system';
 import { useEffect, useState } from 'react';
 
+import { clearLocalRides } from '@/hooks/my-rides-store';
 import { getUserId, useAuth } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabase';
 
@@ -130,6 +131,26 @@ export async function saveProfile(next: Profile) {
 export async function isNicknameAvailable(name: string) {
   const { data, error } = await supabase.rpc('nickname_available', { name });
   return error ? true : !!data;
+}
+
+// 회원 탈퇴: 프로필 사진 → 서버 계정과 모든 기록 → 폰에 남은 기록 순서로 지우고 로그아웃
+export async function deleteMyAccount() {
+  const userId = getUserId();
+  if (!userId) throw new Error('로그인이 필요해요');
+
+  const { data: files } = await supabase.storage.from('avatars').list(userId);
+  if (files?.length) {
+    await supabase.storage.from('avatars').remove(files.map((f) => `${userId}/${f.name}`));
+  }
+
+  const { error } = await supabase.rpc('delete_my_account');
+  if (error) throw new Error('탈퇴하지 못했어요. 잠시 후 다시 시도해 주세요');
+
+  await clearLocalRides(userId);
+  current = DEFAULT_PROFILE;
+  loadedFor = null;
+  // 서버 계정이 이미 없으므로 이 기기의 로그인 정보만 지움
+  await supabase.auth.signOut({ scope: 'local' });
 }
 
 export function useProfile() {

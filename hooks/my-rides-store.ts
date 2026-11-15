@@ -142,6 +142,14 @@ function flushPending(userId: string) {
   return flushing;
 }
 
+// 탈퇴할 때 이 계정이 폰에 남긴 기록(아직 못 올린 것 포함)을 지움
+export async function clearLocalRides(userId: string) {
+  const pending = await readList<Pending>(PENDING_KEY);
+  await AsyncStorage.setItem(PENDING_KEY, JSON.stringify(pending.filter((p) => p.userId !== userId)));
+  if (cache.userId === userId) cache = { userId: null, rides: [] };
+  listeners.forEach((l) => l());
+}
+
 export async function refreshMyRides() {
   const userId = getUserId();
   if (!userId) return [];
