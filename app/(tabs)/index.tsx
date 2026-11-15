@@ -3,8 +3,9 @@ import * as Haptics from 'expo-haptics';
 import { useKeepAwake } from 'expo-keep-awake';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, BackHandler, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, BackHandler, Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 
+import { Text } from '@/components/ui/text';
 import { WebView } from '@/lib/webview';
 import {
   DEFAULT_CENTER,

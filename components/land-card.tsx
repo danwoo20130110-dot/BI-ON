@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
+import { Text } from '@/components/ui/text';
 import { formatArea } from '@/lib/territory';
 
 export type LandInfo = {
@@ -48,7 +49,7 @@ function formatPace(km: number, sec: number) {
 const mmss = (sec: number) => `${Math.floor(sec / 60)}'${pad2(Math.round(sec % 60))}"`;
 
 // 1km 구간마다: 걸린 시간, 속력, 가장 빠른 구간 대비 막대
-function Splits({ splits, last }: { splits: number[]; last: { km: number; sec: number } | null }) {
+export function Splits({ splits, last }: { splits: number[]; last: { km: number; sec: number } | null }) {
   const rows = splits.map((sec, i) => ({ label: `${i + 1}km`, km: 1, sec }));
   if (last) rows.push({ label: `+${last.km.toFixed(2)}km`, km: last.km, sec: last.sec });
   if (!rows.length) return null;

@@ -1,77 +1,57 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { SCHOOLS, type School, type SchoolLevel } from '@/constants/schools';
-import { canSearchOnline, searchSchools } from '@/lib/school-search';
+import { Text, TextInput } from '@/components/ui/text';
+import { type School, type SchoolLevel } from '@/constants/schools';
+import { searchSchools } from '@/lib/school-search';
 
 const ORANGE = '#FFA51F';
 const LEVELS: ('전체' | SchoolLevel)[] = ['전체', '초등학교', '중학교', '고등학교', '대학교', '기타'];
-const MAX_RESULTS = 100;
-const SEARCH_DELAY_MS = 350;
-
-const norm = (t: string) => t.replace(/\s/g, '');
-const INDEX = SCHOOLS.map((s) => ({ school: s, key: norm(s.name) + '|' + norm(s.region) }));
+const SEARCH_DELAY_MS = 300;
 
 type Props = {
-  selected: string;
+  // 지금 고른 학교의 ID
+  selectedId: string | null;
   onSelect: (school: School) => void;
 };
 
-export function SchoolPicker({ selected, onSelect }: Props) {
+export function SchoolPicker({ selectedId, onSelect }: Props) {
   const [query, setQuery] = useState('');
   const [level, setLevel] = useState<(typeof LEVELS)[number]>('전체');
-  const [online, setOnline] = useState<{ query: string; schools: School[] }>({ query: '', schools: [] });
+  const [result, setResult] = useState<{ key: string; schools: School[] }>({ key: '', schools: [] });
   const [error, setError] = useState<string | null>(null);
 
   const trimmed = query.trim();
-  const searching = canSearchOnline && trimmed.length >= 2 && online.query !== trimmed && !error;
+  const key = `${level}|${trimmed}`;
+  const searching = trimmed.length >= 1 && result.key !== key && !error;
 
+  // 전국 학교 목록은 서버에 있어 입력이 멈출 때마다 검색
   useEffect(() => {
-    if (!canSearchOnline || trimmed.length < 2) return;
-    const ctrl = new AbortController();
+    if (trimmed.length < 1) return;
+    let alive = true;
     const t = setTimeout(() => {
-      searchSchools(trimmed, ctrl.signal)
+      searchSchools(trimmed, level === '전체' ? null : level)
         .then((schools) => {
+          if (!alive) return;
           setError(null);
-          setOnline({ query: trimmed, schools });
+          setResult({ key: `${level}|${trimmed}`, schools });
         })
-        .catch((e) => {
-          if (e.name !== 'AbortError') setError('전국 검색에 실패했어요. 인터넷 연결을 확인해 주세요.');
-        });
+        .catch(() => alive && setError('학교 검색에 실패했어요. 인터넷 연결을 확인해 주세요.'));
     }, SEARCH_DELAY_MS);
     return () => {
+      alive = false;
       clearTimeout(t);
-      ctrl.abort();
     };
-  }, [trimmed]);
+  }, [trimmed, level]);
 
-  const q = norm(trimmed);
-  const byLevel = (s: School) => level === '전체' || s.level === level;
+  const results = result.key === key ? result.schools : [];
 
-  const remote = online.query === trimmed ? online.schools.filter(byLevel) : [];
-  const seen = new Set(remote.map((s) => `${s.name}|${s.region}`));
-  const local = INDEX.filter((e) => byLevel(e.school) && (q === '' || e.key.includes(q)))
-    .sort((a, b) => (q ? Number(!a.key.startsWith(q)) - Number(!b.key.startsWith(q)) : 0))
-    .map((e) => e.school)
-    .filter((s) => !seen.has(`${s.name}|${s.region}`));
-  const all = [...remote, ...local];
-  const results = all.slice(0, MAX_RESULTS);
-  const exact = all.some((s) => s.name === trimmed);
-
-  let status = `${all.length.toLocaleString()}개 학교`;
-  if (trimmed.length < 2) status = '학교 이름을 2글자 이상 입력하면 전국 학교를 찾아요';
-  else if (searching) status = '전국 학교 검색 중…';
+  let status = `${results.length.toLocaleString()}개 학교${results.length >= 100 ? ' (더 정확히 입력해 보세요)' : ''}`;
+  if (trimmed.length < 1) status = '학교 이름을 입력하면 전국 학교를 찾아요';
+  else if (searching) status = '검색 중…';
   else if (error) status = error;
+  else if (!results.length) status = '찾는 학교가 없어요. 학교 이름을 다시 확인해 주세요';
 
   return (
     <View style={styles.container}>
@@ -117,25 +97,11 @@ export function SchoolPicker({ selected, onSelect }: Props) {
 
       <FlatList
         data={results}
-        keyExtractor={(s) => `${s.name}|${s.region}`}
+        keyExtractor={(s) => s.id}
         keyboardShouldPersistTaps="handled"
         style={styles.list}
-        ListFooterComponent={
-          trimmed.length >= 2 && !exact && !searching ? (
-            <Pressable
-              style={styles.row}
-              onPress={() => onSelect({ name: trimmed, region: '', level: '기타' })}
-            >
-              <Ionicons name="add-circle-outline" size={20} color={ORANGE} />
-              <View style={styles.rowText}>
-                <Text style={styles.name}>‘{trimmed}’ 직접 입력</Text>
-                <Text style={styles.region}>찾는 학교가 없어요</Text>
-              </View>
-            </Pressable>
-          ) : undefined
-        }
         renderItem={({ item }) => {
-          const active = item.name === selected;
+          const active = item.id === selectedId;
           return (
             <Pressable style={[styles.row, active && styles.rowActive]} onPress={() => onSelect(item)}>
               <Ionicons name="school-outline" size={20} color={active ? ORANGE : '#BDBDBD'} />

@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabase';
 
 export type Profile = {
   nickname: string;
+  // 서버 학교 목록의 ID (없으면 학교 미등록). 이름·지역은 서버가 이 ID 로 채움
+  schoolId: string | null;
   school: string;
   schoolRegion: string;
   grade: string;
@@ -16,6 +18,7 @@ export type Profile = {
 
 export const DEFAULT_PROFILE: Profile = {
   nickname: '',
+  schoolId: null,
   school: '',
   schoolRegion: '',
   grade: '',
@@ -25,6 +28,7 @@ export const DEFAULT_PROFILE: Profile = {
 
 type Row = {
   nickname: string;
+  school_id: string | null;
   school_name: string | null;
   school_region: string | null;
   grade: string | null;
@@ -43,6 +47,7 @@ export function avatarUrl(path: string | null, version: string) {
 function fromRow(r: Row): Profile {
   return {
     nickname: r.nickname,
+    schoolId: r.school_id,
     school: r.school_name ?? '',
     schoolRegion: r.school_region ?? '',
     grade: r.grade ?? '',
@@ -59,7 +64,7 @@ const notify = () => listeners.forEach((l) => l(current, loadedFor !== null));
 async function load(userId: string) {
   const { data, error } = await supabase
     .from('profiles')
-    .select('nickname, school_name, school_region, grade, bio, avatar_path, updated_at')
+    .select('nickname, school_id, school_name, school_region, grade, bio, avatar_path, updated_at')
     .eq('id', userId)
     .single();
   if (error || !data) return;
@@ -102,8 +107,7 @@ export async function saveProfile(next: Profile) {
 
   const update: Record<string, string | null> = {
     nickname: next.nickname.trim(),
-    school_name: next.school.trim() || null,
-    school_region: next.school.trim() ? next.schoolRegion.trim() || null : null,
+    school_id: next.schoolId,
     grade: next.grade || null,
     bio: next.bio.trim() || null,
   };
@@ -113,7 +117,7 @@ export async function saveProfile(next: Profile) {
     .from('profiles')
     .update(update)
     .eq('id', userId)
-    .select('nickname, school_name, school_region, grade, bio, avatar_path, updated_at')
+    .select('nickname, school_id, school_name, school_region, grade, bio, avatar_path, updated_at')
     .single();
   if (error) {
     if (error.code === '23505') throw new Error('이미 사용 중인 닉네임이에요');

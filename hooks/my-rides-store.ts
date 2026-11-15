@@ -198,6 +198,32 @@ export function useMyRides() {
   return snap.userId === userId ? snap.rides : [];
 }
 
+// ── 전체 기록 화면용: 최근 기록부터 한 쪽씩 서버에서 받음 ──
+export type RideListItem = MyRide & { id: string };
+export type RideTotals = { count: number; km: number; sec: number; maxKmh: number };
+
+const LIST_COLUMNS = 'id, started_at, distance_km, duration_sec, avg_kmh, max_kmh, elevation_gain, splits, last_split';
+
+// before: 이 시각보다 이전 기록 (다음 쪽), 없으면 가장 최근부터
+export async function fetchRidePage(before: number | null, limit: number): Promise<RideListItem[] | null> {
+  let q = supabase.from('rides').select(LIST_COLUMNS).order('started_at', { ascending: false }).limit(limit);
+  if (before != null) q = q.lt('started_at', new Date(before).toISOString());
+  const { data, error } = await q;
+  if (error || !data) return null;
+  return (data as (Omit<Row, 'points'> & { id: string })[]).map((r) => ({ ...fromRow({ ...r, points: [] }), id: r.id }));
+}
+
+export async function fetchRide(id: string): Promise<RideListItem | null> {
+  const { data, error } = await supabase.from('rides').select(`id, ${COLUMNS}`).eq('id', id).single();
+  if (error || !data) return null;
+  return { ...fromRow(data as Row), id: (data as { id: string }).id };
+}
+
+export async function fetchRideTotals(): Promise<RideTotals | null> {
+  const { data, error } = await supabase.rpc('my_ride_totals');
+  return error || !data ? null : (data as RideTotals);
+}
+
 export function weekKm(rides: MyRide[]) {
   const from = Date.now() - 7 * 86400000;
   return rides.filter((r) => r.stat && r.stat.at >= from).reduce((a, r) => a + (r.stat?.km ?? 0), 0);

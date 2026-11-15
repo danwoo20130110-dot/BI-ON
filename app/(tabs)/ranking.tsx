@@ -7,24 +7,22 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
   View,
   useWindowDimensions,
 } from 'react-native';
 
+import { Text } from '@/components/ui/text';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { useRanking, type RankRow } from '@/hooks/use-ranking';
 import { formatArea as fmt } from '@/lib/territory';
-
-const SCHOOL_IMAGE = require('../../assets/images/Frame 2080012756.png');
 
 const PODIUM_RATIO = { 1: 213 / 234, 2: 214 / 190, 3: 214 / 159 };
 const SCREEN_PAD = 10;
 const PODIUM_PAD = 28;
 const PODIUM_GAP = 6;
 
-function Avatar({ row, school, size, style }: { row: RankRow; school: boolean; size: number; style?: object }) {
-  if (school) return <Image source={SCHOOL_IMAGE} style={[{ width: size, height: size, borderRadius: size / 2 }, style]} />;
+// 개인 순위에만 프로필 사진 (학교 순위는 사진 없이)
+function Avatar({ row, size, style }: { row: RankRow; size: number; style?: object }) {
   return (
     <View style={style}>
       <ProfileAvatar nickname={row.name} photoUri={row.photoUri ?? null} size={size} />
@@ -53,11 +51,12 @@ export default function RankingScreen() {
     return (
       <View style={styles.podiumCol}>
         {big && <Image source={require('../../assets/images/trophy.png')} style={styles.trophy} />}
-        {r ? (
-          <Avatar row={r} school={isSchool} size={big ? 62 : 44} />
-        ) : (
-          <View style={[styles.emptySeat, big ? styles.image1 : styles.image2]} />
-        )}
+        {!isSchool &&
+          (r ? (
+            <Avatar row={r} size={big ? 62 : 44} />
+          ) : (
+            <View style={[styles.emptySeat, big ? styles.image1 : styles.image2]} />
+          ))}
         <Text style={[styles.name, r && isMe(r) && styles.myInlineText]} numberOfLines={1}>
           {r ? r.name : '—'}
         </Text>
@@ -106,7 +105,7 @@ export default function RankingScreen() {
           return (
             <View key={entry.id} style={[styles.rank2, mine && styles.myInlineRow]}>
               <Text style={[styles.num, mine && styles.myInlineText]}>{entry.rank}</Text>
-              <Avatar row={entry} school={isSchool} size={32} />
+              {!isSchool && <Avatar row={entry} size={32} />}
               <View style={styles.nameCol}>
                 <Text style={[styles.pad, mine && styles.myInlineText]} numberOfLines={1}>
                   {entry.name}
@@ -133,7 +132,7 @@ export default function RankingScreen() {
         {me ? (
           <View style={[styles.rank2, styles.myRow]}>
             <Text style={[styles.num, styles.myText]}>{me.rank}</Text>
-            <Avatar row={me} school={isSchool} size={32} style={styles.myImage} />
+            {!isSchool && <Avatar row={me} size={32} style={styles.myImage} />}
             <View style={styles.nameCol}>
               <Text style={[styles.pad, styles.myText]} numberOfLines={1}>{me.name}</Text>
               {!!sub(me) && <Text style={styles.mySub} numberOfLines={1}>{sub(me)}</Text>}

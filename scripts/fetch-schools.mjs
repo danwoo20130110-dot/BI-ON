@@ -1,3 +1,6 @@
+// 교육부 NEIS 에서 전국 초·중·고(특수·각종학교 포함) 목록을 받아 Supabase 마이그레이션(SQL)으로 저장
+// 사용: npm run fetch-schools  (.env 에 NEIS_API_KEY 필요, 발급: https://open.neis.go.kr)
+// 만든 파일을 supabase db push 로 적용하면 서버 학교 목록이 새로 채워짐
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -29,8 +32,12 @@ const SIDO_SHORT = {
   강원특별자치도: '강원', 충청북도: '충북', 충청남도: '충남', 전라북도: '전북', 전북특별자치도: '전북',
   전라남도: '전남', 경상북도: '경북', 경상남도: '경남', 제주특별자치도: '제주',
 };
+// 통합 시·도는 괄호 속 옛 이름으로 (예: 전남광주통합특별시(광주) → 광주)
+const sidoOf = (s) => s?.match(/\(([^)]+)\)$/)?.[1] ?? s;
+
 function shortRegion(addr, fallback) {
-  const parts = (addr || '').trim().split(/\s+/);
+  const parts = (addr || '').trim().split(/\s+/).map((p, i) => (i === 0 ? sidoOf(p) : p));
+  fallback = sidoOf(fallback);
   const sido = SIDO_SHORT[parts[0]] ?? SIDO_SHORT[fallback] ?? fallback ?? '';
   return [sido, parts[1] && !SIDO_SHORT[parts[1]] ? parts[1] : ''].filter(Boolean).join(' ');
 }
@@ -54,22 +61,37 @@ for (let page = 1; ; page++) {
   if (list.length < PAGE) break;
 }
 
+// [학교코드, 이름, 지역, 급]  학교코드(SD_SCHUL_CODE)는 전국에서 하나뿐
 const seen = new Set();
 const schools = rows
-  .filter((r) => r.SCHUL_NM && !r.SCHUL_NM.startsWith('(가칭)'))
+  .filter((r) => r.SD_SCHUL_CODE && r.SCHUL_NM && !r.SCHUL_NM.startsWith('(가칭)'))
   .map((r) => [
+    r.SD_SCHUL_CODE.trim(),
     r.SCHUL_NM.trim(),
     shortRegion(r.ORG_RDNMA, r.LCTN_SC_NM),
     LEVELS[r.SCHUL_KND_SC_NM] ?? 'O',
   ])
-  .filter(([name, region]) => {
-    const k = `${name}|${region}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  })
-  .sort((a, b) => a[0].localeCompare(b[0], 'ko'));
+  .filter(([code]) => !seen.has(code) && seen.add(code))
+  .sort((a, b) => a[1].localeCompare(b[1], 'ko'));
 
-const out = path.join(root, 'assets', 'data', 'schools.json');
-fs.writeFileSync(out, JSON.stringify(schools));
+const q = (s) => `'${s.replace(/'/g, "''")}'`;
+const CHUNK = 500;
+const parts = [
+  '-- NEIS 학교 목록 (scripts/fetch-schools.mjs 로 생성, 직접 고치지 말 것)',
+  `-- 생성: ${new Date().toISOString().slice(0, 10)}, ${schools.length}개`,
+];
+for (let i = 0; i < schools.length; i += CHUNK) {
+  const values = schools
+    .slice(i, i + CHUNK)
+    .map(([code, name, region, level]) => `(${q('N' + code)}, ${q(name)}, ${q(region)}, ${q(level)})`)
+    .join(',\n');
+  parts.push(
+    `insert into public.schools (id, name, region, level) values\n${values}\n` +
+      'on conflict (id) do update set name = excluded.name, region = excluded.region, level = excluded.level;',
+  );
+}
+
+const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+const out = path.join(root, 'supabase', 'migrations', `${stamp}_schools_data.sql`);
+fs.writeFileSync(out, parts.join('\n\n') + '\n');
 console.log(`저장 완료: ${schools.length}개 학교 → ${path.relative(root, out)}`);

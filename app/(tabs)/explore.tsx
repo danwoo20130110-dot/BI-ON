@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useState } from 'react';
-import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Dimensions, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text } from '@/components/ui/text';
 import { ProfileAvatar } from '@/components/profile-avatar';
-import { useMyRides, type MyRide } from '@/hooks/my-rides-store';
+import { fetchRideTotals, useMyRides, type MyRide, type RideTotals } from '@/hooks/my-rides-store';
 import { useProfile } from '@/hooks/use-profile';
 import { supabase } from '@/lib/supabase';
 
@@ -112,8 +113,16 @@ export default function ProfileScreen() {
   const hasRides = myRides.length > 0;
   const rows = myRides.slice(-3).reverse().map(toRow);
   const trend = weekTrend(myRides);
-  const totalKm = myRides.reduce((a, r) => a + (r.stat?.km ?? 0), 0);
-  const bestSpeed = myRides.reduce((a, r) => Math.max(a, r.stat?.max ?? 0), 0);
+  // 합계는 서버에서 전체 기록으로 셈 (폰에는 최근 기록만 있음)
+  const [totals, setTotals] = useState<RideTotals | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      fetchRideTotals().then((t) => t && setTotals(t));
+    }, []),
+  );
+  const rideCount = totals?.count ?? myRides.length;
+  const totalKm = totals?.km ?? myRides.reduce((a, r) => a + (r.stat?.km ?? 0), 0);
+  const bestSpeed = totals?.maxKmh ?? myRides.reduce((a, r) => Math.max(a, r.stat?.max ?? 0), 0);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -150,11 +159,17 @@ export default function ProfileScreen() {
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>최근 라이딩 기록</Text>
+            {hasRides && (
+              <Pressable style={styles.moreRow} onPress={() => router.push('/rides')} hitSlop={8}>
+                <Text style={styles.moreText}>전체 보기</Text>
+                <Ionicons name="chevron-forward" size={rs(14)} color="#BDBDBD" />
+              </Pressable>
+            )}
           </View>
           {hasRides && (
             <View style={styles.totals}>
               <View style={styles.total}>
-                <Text style={styles.totalValue}>{myRides.length}회</Text>
+                <Text style={styles.totalValue}>{rideCount}회</Text>
                 <Text style={styles.totalLabel}>라이딩</Text>
               </View>
               <View style={styles.total}>
@@ -285,6 +300,15 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: rs(17),
     fontWeight: '700',
+  },
+  moreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: rs(2),
+  },
+  moreText: {
+    color: '#BDBDBD',
+    fontSize: rs(13),
   },
   rideList: {
     gap: rs(10),

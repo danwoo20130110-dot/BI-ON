@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { createElement, useCallback, useEffect, useRef, useState } from 'react';
 import { router, useFocusEffect } from 'expo-router';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text } from '@/components/ui/text';
 import { WebView } from '@/lib/webview';
 import { DEFAULT_CENTER, MAP_BASE_URL } from '@/constants/kakao-map';
 import { LandCard, type LandInfo } from '@/components/land-card';

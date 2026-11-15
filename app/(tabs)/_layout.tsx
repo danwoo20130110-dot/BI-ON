@@ -20,6 +20,7 @@ export default function TabLayout() {
           paddingBottom: bottomPad,
         },
         tabBarLabelStyle: {
+          fontFamily: 'Pretendard-Medium',
           fontSize: 11,
           marginTop: 4,
         },

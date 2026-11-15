@@ -8,12 +8,11 @@ import {
   Platform,
   Pressable,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text, TextInput } from '@/components/ui/text';
 import { authErrorText } from '@/hooks/use-auth';
 import { supabase } from '@/lib/supabase';
 

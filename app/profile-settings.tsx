@@ -10,12 +10,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text, TextInput } from '@/components/ui/text';
 import { ProfileAvatar } from '@/components/profile-avatar';
 import { SchoolPicker } from '@/components/school-picker';
 import { GRADES, schoolLevelOf } from '@/constants/schools';
@@ -181,7 +180,7 @@ export default function ProfileSettingsScreen() {
               </Text>
               {draft.school ? (
                 <Pressable
-                  onPress={() => setDraft((d) => ({ ...d, school: '', schoolRegion: '', grade: '' }))}
+                  onPress={() => setDraft((d) => ({ ...d, schoolId: null, school: '', schoolRegion: '', grade: '' }))}
                   hitSlop={10}
                 >
                   <Text style={styles.unregister}>등록 해제</Text>
@@ -239,13 +238,14 @@ export default function ProfileSettingsScreen() {
           </View>
           <View style={styles.pickerBody}>
             <SchoolPicker
-              selected={draft.school}
-              onSelect={({ name, region }) => {
+              selectedId={draft.schoolId}
+              onSelect={({ id, name, region }) => {
                 setDraft((d) => ({
                   ...d,
+                  schoolId: id,
                   school: name,
                   schoolRegion: region,
-                  grade: name === d.school ? d.grade : '',
+                  grade: id === d.schoolId ? d.grade : '',
                 }));
                 setPickingSchool(false);
               }}

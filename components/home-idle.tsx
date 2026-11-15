@@ -1,7 +1,8 @@
 import { router } from 'expo-router';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Text } from '@/components/ui/text';
 import { useMyRides, weekKm } from '@/hooks/my-rides-store';
 import { useProfile } from '@/hooks/use-profile';
 import { useRanking } from '@/hooks/use-ranking';

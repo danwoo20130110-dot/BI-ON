@@ -1,19 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Text, TextInput } from '@/components/ui/text';
 import { SchoolPicker } from '@/components/school-picker';
-import { GRADES, schoolLevelOf } from '@/constants/schools';
+import { GRADES, type School } from '@/constants/schools';
 import { authErrorText } from '@/hooks/use-auth';
 import { isNicknameAvailable } from '@/hooks/use-profile';
 import { supabase } from '@/lib/supabase';
@@ -27,8 +20,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function SignupScreen() {
   const [step, setStep] = useState(1);
-  const [school, setSchool] = useState('');
-  const [schoolRegion, setSchoolRegion] = useState('');
+  const [school, setSchool] = useState<School | null>(null);
   const [grade, setGrade] = useState('');
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
@@ -39,8 +31,7 @@ export default function SignupScreen() {
   // 이메일 인증이 켜져 있어 바로 로그인되지 않은 경우
   const [checkMail, setCheckMail] = useState(false);
 
-  const level = schoolLevelOf(school);
-  const grades = GRADES[level];
+  const grades = GRADES[school?.level ?? '고등학교'];
   const nick = nickname.trim();
   const nickError =
     nick.length > 0 && nick.length < NICKNAME_MIN ? `닉네임은 ${NICKNAME_MIN}자 이상이에요` : null;
@@ -77,7 +68,7 @@ export default function SignupScreen() {
     const { data, error: e } = await supabase.auth.signUp({
       email: email.trim(),
       password,
-      options: { data: { nickname: nick, school_name: school, school_region: schoolRegion, grade } },
+      options: { data: { nickname: nick, school_id: school?.id ?? null, grade } },
     });
     setSaving(false);
     if (e) {
@@ -112,11 +103,10 @@ export default function SignupScreen() {
           <Text style={styles.title}>어느 학교 라이더인가요?</Text>
           <Text style={styles.subtitle}>같은 학교 친구들과 함께 학교 랭킹에 도전해요</Text>
           <SchoolPicker
-            selected={school}
+            selectedId={school?.id ?? null}
             onSelect={(picked) => {
-              if (picked.name !== school) setGrade('');
-              setSchool(picked.name);
-              setSchoolRegion(picked.region);
+              if (picked.id !== school?.id) setGrade('');
+              setSchool(picked);
               setStep(2);
             }}
           />
@@ -133,10 +123,8 @@ export default function SignupScreen() {
           <Pressable style={styles.schoolCard} onPress={() => setStep(1)}>
             <Ionicons name="school" size={22} color={ORANGE} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.schoolName}>{school}</Text>
-              <Text style={styles.schoolMeta}>
-                {schoolRegion || '직접 입력한 학교'}
-              </Text>
+              <Text style={styles.schoolName}>{school?.name}</Text>
+              <Text style={styles.schoolMeta}>{school?.region}</Text>
             </View>
             <Text style={styles.change}>변경</Text>
           </Pressable>
