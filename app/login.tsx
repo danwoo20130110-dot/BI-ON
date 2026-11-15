@@ -5,7 +5,6 @@ import {
   Image,
   ImageBackground,
   KeyboardAvoidingView,
-  Platform,
   Pressable,
   StyleSheet,
   View,
@@ -44,7 +43,7 @@ export default function LoginScreen() {
         <SafeAreaView style={s.container}>
           <KeyboardAvoidingView
             style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior="padding"
           >
             <View style={s.center}>
               <Image source={require('../assets/images/BION.png')} style={s.logo} resizeMode="contain" />

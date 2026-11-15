@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Text, TextInput } from '@/components/ui/text';
@@ -116,7 +116,7 @@ export default function SignupScreen() {
       {step === 2 && (
         <KeyboardAvoidingView
           style={styles.body}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
         >
           <Text style={styles.title}>학년과 닉네임을 알려주세요</Text>
 
@@ -177,7 +177,7 @@ export default function SignupScreen() {
       {step === 3 && !checkMail && (
         <KeyboardAvoidingView
           style={styles.body}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior="padding"
         >
           <Text style={styles.title}>로그인에 쓸 계정을 만들어요</Text>
 
