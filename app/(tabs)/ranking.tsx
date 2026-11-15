@@ -1,118 +1,146 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
-import { useProfile } from '@/hooks/use-profile';
-import { buildRanking } from '@/lib/sample-ranking';
+import { ProfileAvatar } from '@/components/profile-avatar';
+import { useRanking, type RankRow } from '@/hooks/use-ranking';
+import { formatArea as fmt } from '@/lib/territory';
 
-type Row = { rank: number; name: string; sub: string; km: number; me?: boolean };
+const SCHOOL_IMAGE = require('../../assets/images/Frame 2080012756.png');
 
-const LIST_UNTIL = 50;
-const AVATAR = require('../../assets/images/Frame 2080012756.png');
-
-// 단상 이미지 원본 비율 (가로 / 세로) — 비율 그대로 그려야 찌그러지지 않음
 const PODIUM_RATIO = { 1: 213 / 234, 2: 214 / 190, 3: 214 / 159 };
 const SCREEN_PAD = 10;
 const PODIUM_PAD = 28;
 const PODIUM_GAP = 6;
 
-const fmt = (km: number) => `${km.toLocaleString()}km²`;
+function Avatar({ row, school, size, style }: { row: RankRow; school: boolean; size: number; style?: object }) {
+  if (school) return <Image source={SCHOOL_IMAGE} style={[{ width: size, height: size, borderRadius: size / 2 }, style]} />;
+  return (
+    <View style={style}>
+      <ProfileAvatar nickname={row.name} photoUri={row.photoUri ?? null} size={size} />
+    </View>
+  );
+}
 
 export default function RankingScreen() {
   const [selectButtonIndex, setSelectButtonIndex] = useState(0);
   const isSchool = selectButtonIndex === 0;
-  const { profile } = useProfile();
-  const mySchool = profile.school.trim() || null;
-  const { riders, schools } = buildRanking(profile.nickname, mySchool);
+  const ranking = useRanking(isSchool ? 'school' : 'personal');
 
-  // 학교 탭: 학교 기록(소속 라이더 합), 개인 탭: 라이더 기록 (학교 등록 여부와 무관)
-  const rows: Row[] = isSchool
-    ? schools.map((s, i) => ({ rank: i + 1, name: s.name, sub: `라이더 ${s.riders}명`, km: s.km, me: s.mine }))
-    : riders.map((r, i) => ({ rank: i + 1, name: r.name, sub: '', km: r.km, me: r.me }));
-  const [first, second, third] = rows;
-  const list = rows.slice(3, LIST_UNTIL);
-  const me = rows.find((r) => r.me);
+  const sub = (r: RankRow) => (isSchool ? `라이더 ${r.riders ?? 0}명` : (r.school ?? ''));
+  const rows = ranking?.rows ?? [];
+  const me = ranking?.me ?? null;
+  const isMe = (r: RankRow) => r.id === me?.id;
+  const list = rows.slice(3);
 
   const { width: screenW } = useWindowDimensions();
   const colW = (screenW - SCREEN_PAD * 2 - PODIUM_PAD * 2 - PODIUM_GAP * 2) / 3;
   const blockSize = (rank: 1 | 2 | 3) => ({ width: colW, height: colW / PODIUM_RATIO[rank] });
 
+  const podium = (place: 1 | 2 | 3) => {
+    const r = rows[place - 1];
+    const big = place === 1;
+    return (
+      <View style={styles.podiumCol}>
+        {big && <Image source={require('../../assets/images/trophy.png')} style={styles.trophy} />}
+        {r ? (
+          <Avatar row={r} school={isSchool} size={big ? 62 : 44} />
+        ) : (
+          <View style={[styles.emptySeat, big ? styles.image1 : styles.image2]} />
+        )}
+        <Text style={[styles.name, r && isMe(r) && styles.myInlineText]} numberOfLines={1}>
+          {r ? r.name : '—'}
+        </Text>
+        <Text style={styles.km2}>{r ? fmt(r.area) : ' '}</Text>
+        <Image
+          source={
+            place === 1
+              ? require('../../assets/images/podium_1.png')
+              : place === 2
+                ? require('../../assets/images/podium_2.png')
+                : require('../../assets/images/podium_3.png')
+          }
+          style={[styles.block, blockSize(place)]}
+        />
+      </View>
+    );
+  };
+
   return (
     <View style={styles.Container}>
       <View style={styles.toggleContainer}>
-        <Pressable style={selectButtonIndex == 0? styles.toggleActiveBtn : styles.toggleBtn} onPress={() => setSelectButtonIndex(0)}>
-          <Text style={selectButtonIndex == 0? styles.toggleActiveText : styles.toggleText}>학교</Text>
+        <Pressable style={isSchool ? styles.toggleActiveBtn : styles.toggleBtn} onPress={() => setSelectButtonIndex(0)}>
+          <Text style={isSchool ? styles.toggleActiveText : styles.toggleText}>학교</Text>
         </Pressable>
-        <Pressable style={selectButtonIndex == 1? styles.toggleActiveBtn : styles.toggleBtn} onPress={() => setSelectButtonIndex(1)}>
-          <Text style={selectButtonIndex == 1? styles.toggleActiveText : styles.toggleText}>개인</Text>
+        <Pressable style={!isSchool ? styles.toggleActiveBtn : styles.toggleBtn} onPress={() => setSelectButtonIndex(1)}>
+          <Text style={!isSchool ? styles.toggleActiveText : styles.toggleText}>개인</Text>
         </Pressable>
       </View>
 
       <View style={styles.podium}>
-        <View style={styles.podiumCol}>
-          <Image source={AVATAR} style={styles.image2} />
-          <Text style={styles.name} numberOfLines={1}>{second.name}</Text>
-          <Text style={styles.km2}>{fmt(second.km)}</Text>
-          <Image source={require('../../assets/images/podium_2.png')} style={[styles.block, blockSize(2)]} />
-        </View>
-
-        <View style={styles.podiumCol}>
-          <Image source={require('../../assets/images/trophy.png')} style={styles.trophy} />
-          <Image source={AVATAR} style={styles.image1} />
-          <Text style={styles.name} numberOfLines={1}>{first.name}</Text>
-          <Text style={styles.km2}>{fmt(first.km)}</Text>
-          <Image source={require('../../assets/images/podium_1.png')} style={[styles.block, blockSize(1)]} />
-        </View>
-
-        <View style={styles.podiumCol}>
-          <Image source={AVATAR} style={styles.image2} />
-          <Text style={styles.name} numberOfLines={1}>{third.name}</Text>
-          <Text style={styles.km2}>{fmt(third.km)}</Text>
-          <Image source={require('../../assets/images/podium_3.png')} style={[styles.block, blockSize(3)]} />
-        </View>
+        {podium(2)}
+        {podium(1)}
+        {podium(3)}
       </View>
 
-      <Text style={styles.caption}>
-        {isSchool ? '학교 기록 = 그 학교 라이더 모두의 기록 합계' : '라이더 개인 기록'} · 예시 데이터 (가상)
-      </Text>
-
       <ScrollView style={styles.listScroll} contentContainerStyle={styles.list}>
-        {list.map((entry) => (
-          <View key={entry.rank} style={[styles.rank2, entry.me && styles.myInlineRow]}>
-            <Text style={[styles.num, entry.me && styles.myInlineText]}>{entry.rank}</Text>
-            <Image source={AVATAR} style={styles.image} />
-            <View style={styles.nameCol}>
-              <Text style={[styles.pad, entry.me && styles.myInlineText]} numberOfLines={1}>
-                {entry.name}
-                {entry.me ? ' (나)' : ''}
-              </Text>
-              {!!entry.sub && <Text style={styles.sub} numberOfLines={1}>{entry.sub}</Text>}
+        {!ranking && <ActivityIndicator color="#8A8A8A" style={styles.empty} />}
+        {ranking && rows.length === 0 && (
+          <Text style={styles.emptyText}>
+            {isSchool ? '아직 땅을 가진 학교가 없어요.' : '아직 땅을 가진 라이더가 없어요.'}
+            {'\n'}라이딩으로 첫 땅을 차지해 보세요!
+          </Text>
+        )}
+        {list.map((entry) => {
+          const mine = isMe(entry);
+          return (
+            <View key={entry.id} style={[styles.rank2, mine && styles.myInlineRow]}>
+              <Text style={[styles.num, mine && styles.myInlineText]}>{entry.rank}</Text>
+              <Avatar row={entry} school={isSchool} size={32} />
+              <View style={styles.nameCol}>
+                <Text style={[styles.pad, mine && styles.myInlineText]} numberOfLines={1}>
+                  {entry.name}
+                  {mine ? (isSchool ? ' (우리 학교)' : ' (나)') : ''}
+                </Text>
+                {!!sub(entry) && <Text style={styles.sub} numberOfLines={1}>{sub(entry)}</Text>}
+              </View>
+              <Text style={[styles.km, mine && styles.myInlineText]}>{fmt(entry.area)}</Text>
             </View>
-            <Text style={[styles.km, entry.me && styles.myInlineText]}>{fmt(entry.km)}</Text>
-          </View>
-        ))}
+          );
+        })}
       </ScrollView>
 
       <View style={styles.myArea}>
         <View style={styles.divider}>
           <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>{isSchool ? '우리 학교 순위' : '내 순위'}</Text>
+          <Text style={styles.dividerText}>
+            {isSchool ? '우리 학교 순위' : '내 순위'}
+            {ranking ? ` · 전체 ${ranking.total}${isSchool ? '곳' : '명'}` : ''}
+          </Text>
           <View style={styles.dividerLine} />
         </View>
 
         {me ? (
           <View style={[styles.rank2, styles.myRow]}>
             <Text style={[styles.num, styles.myText]}>{me.rank}</Text>
-            <Image source={AVATAR} style={[styles.image, styles.myImage]} />
+            <Avatar row={me} school={isSchool} size={32} style={styles.myImage} />
             <View style={styles.nameCol}>
               <Text style={[styles.pad, styles.myText]} numberOfLines={1}>{me.name}</Text>
-              {!!me.sub && <Text style={styles.mySub} numberOfLines={1}>{me.sub}</Text>}
+              {!!sub(me) && <Text style={styles.mySub} numberOfLines={1}>{sub(me)}</Text>}
             </View>
-            <Text style={styles.myKm}>{fmt(me.km)}</Text>
+            <Text style={styles.myKm}>{fmt(me.area)}</Text>
           </View>
-        ) : (
-          // 학교를 등록하지 않으면 우리 학교 기록은 보이지 않음
+        ) : ranking && isSchool ? (
           <Pressable style={styles.registerCard} onPress={() => router.push('/profile-settings')}>
             <Ionicons name="school-outline" size={22} color="#FFA51F" />
             <View style={styles.nameCol}>
@@ -121,7 +149,7 @@ export default function RankingScreen() {
             </View>
             <Ionicons name="chevron-forward" size={18} color="#8A8A8A" />
           </Pressable>
-        )}
+        ) : null}
       </View>
     </View>
   );
@@ -282,13 +310,6 @@ const styles = StyleSheet.create({
     color: '#9A9A9A',
   },
 
-  caption: {
-    color: '#6A6A6A',
-    fontSize: 11,
-    textAlign: 'center',
-    marginTop: 8,
-  },
-
   nameCol: {
     flex: 1,
     minWidth: 0,
@@ -354,6 +375,25 @@ const styles = StyleSheet.create({
   myImage: {
     borderWidth: 2,
     borderColor: 'white',
+    borderRadius: 200,
+  },
+
+  emptySeat: {
+    backgroundColor: '#1E1E1E',
+    borderWidth: 1,
+    borderColor: '#333333',
+  },
+
+  empty: {
+    marginTop: 24,
+  },
+
+  emptyText: {
+    marginTop: 24,
+    color: '#8A8A8A',
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
   },
 
   myKm: {

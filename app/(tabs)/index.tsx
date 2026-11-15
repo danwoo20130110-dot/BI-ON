@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { useKeepAwake } from 'expo-keep-awake';
 import { router } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, BackHandler, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { WebView } from '@/lib/webview';
 import {
   DEFAULT_CENTER,
   KAKAO_MAP_JS_KEY,
@@ -12,7 +14,16 @@ import {
   MAP_TILE_FILTER as MAP_FILTER,
 } from '@/constants/kakao-map';
 import { HomeIdle } from '@/components/home-idle';
+import { saveMyRide } from '@/hooks/my-rides-store';
 import { setLastRideSummary } from '@/hooks/ride-summary-store';
+import {
+  getLiveId,
+  liveEnd,
+  liveLocation,
+  livePos,
+  liveStart,
+  subscribeLive,
+} from '@/lib/live-client';
 import { LatLng, useRideTracker } from '@/hooks/use-ride-tracker';
 
 declare global {
@@ -22,10 +33,8 @@ declare global {
   }
 }
 
-// 현재 위치 주소는 이 간격(ms)마다만 다시 조회
 const GEOCODE_INTERVAL_MS = 30000;
 
-// 지도 제어 스크립트 (웹/네이티브 공통). window.bionEmit 으로 RN 쪽에 이벤트를 보냄
 const MAP_SCRIPT = `
 (function () {
   var map, polyline, startOverlay, currentOverlay, geocoder;
@@ -46,13 +55,11 @@ const MAP_SCRIPT = `
     });
     startOverlay = new kakao.maps.CustomOverlay({ position: center, content: pin('시작'), yAnchor: 0.5 });
     currentOverlay = new kakao.maps.CustomOverlay({ position: center, content: pin('현재'), yAnchor: 0.5, zIndex: 2 });
-    // 컨테이너 크기가 나중에 잡히면 타일이 안 그려지므로 다시 레이아웃
     window.addEventListener('resize', function () { map.relayout(); });
     setTimeout(function () { map.relayout(); }, 300);
     emit('ready');
   };
 
-  // offsetY: 아래 패널에 가려지는 높이의 절반(px) — 그만큼 지도 중심을 내려 핀이 보이는 영역 가운데 오게 함
   window.bionSetCurrent = function (lat, lng, offsetY) {
     if (!map) return;
     var p = ll([lat, lng]);
@@ -89,7 +96,6 @@ const MAP_SCRIPT = `
     }
   };
 
-  // 주소 조회는 동시에 여러 개 보내면 응답이 섞이므로 하나씩 순서대로 처리
   var geoQueue = [], geoBusy = false;
   function nextGeocode() {
     if (geoBusy || !geoQueue.length) return;
@@ -105,6 +111,44 @@ const MAP_SCRIPT = `
       nextGeocode();
     });
   }
+  var others = {};
+  function colorOf(id) {
+    var h = 0;
+    for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+    h = Math.abs(h) % 360;
+    if (h > 15 && h < 55) h += 60;
+    return 'hsl(' + h + ',80%,60%)';
+  }
+  window.bionOthers = function (list) {
+    if (!map) return;
+    var seen = {};
+    list.forEach(function (o) {
+      seen[o.id] = true;
+      var c = colorOf(o.id);
+      var e = others[o.id];
+      if (!e) {
+        e = others[o.id] = {
+          line: new kakao.maps.Polyline({ map: map, path: [], strokeWeight: 5, strokeColor: c, strokeOpacity: 0.9 }),
+          dot: new kakao.maps.CustomOverlay({ yAnchor: 1.2, zIndex: 3 }),
+        };
+      }
+      var path = o.trail.map(ll);
+      e.line.setPath(path);
+      if (path.length) {
+        e.dot.setContent('<div style="padding:2px 8px;border-radius:10px;background:' + c +
+          ';color:#000;font:bold 11px sans-serif;white-space:nowrap">' + o.name + '</div>');
+        e.dot.setPosition(path[path.length - 1]);
+        e.dot.setMap(map);
+      }
+    });
+    Object.keys(others).forEach(function (id) {
+      if (seen[id]) return;
+      others[id].line.setMap(null);
+      others[id].dot.setMap(null);
+      delete others[id];
+    });
+  };
+
   window.bionGeocode = function (kind, lat, lng) {
     if (!geocoder) return;
     geoQueue.push({ kind: kind, lat: lat, lng: lng });
@@ -112,7 +156,6 @@ const MAP_SCRIPT = `
   };
 })();
 `;
-
 
 const htmlContent = `
 <!DOCTYPE html>
@@ -122,7 +165,6 @@ const htmlContent = `
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       html, body, #map { width:100%; height:100%; margin:0; padding:0; background:#111; }
-      /* 지도 타일 이미지만 어둡게 반전 (지도 전체에 filter 를 걸면 안드로이드 WebView 메모리 한도를 넘어 안 그려짐) */
       #map img { filter: ${MAP_FILTER}; }
     </style>
   </head>
@@ -180,11 +222,32 @@ function formatDuration(sec: number) {
 const dash = (v: number | null, digits: number, unit: string) =>
   v == null ? '—' : `${v.toFixed(digits)}${unit}`;
 
+const buzz = (type: Haptics.NotificationFeedbackType) =>
+  Haptics.notificationAsync(type).catch(() => {});
+
+// 라이딩 중에는 화면이 꺼지지 않게
+function KeepAwake() {
+  useKeepAwake();
+  return null;
+}
+
 export default function HomeScreen() {
-  const { riding, permissionDenied, current, route, stats, start, stop, getSamples, measureAltitude } =
-    useRideTracker();
+  const {
+    riding,
+    paused,
+    pause,
+    resume,
+    permissionDenied,
+    current,
+    route,
+    stats,
+    start,
+    stop,
+    getSamples,
+    getSplits,
+    measureAltitude,
+  } = useRideTracker();
   const webViewRef = useRef<WebView>(null);
-  // 지도가 (재)로드될 때마다 증가 → 현재 위치/경로를 다시 그림
   const [mapLoadCount, setMapLoadCount] = useState(0);
   const mapReady = mapLoadCount > 0;
   const [startAddress, setStartAddress] = useState<string | null>(null);
@@ -193,6 +256,17 @@ export default function HomeScreen() {
   const rideStartedAtRef = useRef(0);
   const drawnCountRef = useRef(0);
   const [panelHeight, setPanelHeight] = useState(0);
+  const [panelOpen, setPanelOpen] = useState(true);
+  // 다른 사람이 내 경로를 끊으면 그 전까지 달린 부분은 땅으로 치지 않음
+  const [cutIndex, setCutIndex] = useState(0);
+  const [notice, setNotice] = useState<{ text: string; bad: boolean } | null>(null);
+  const routeLenRef = useRef(0);
+  const sentRef = useRef(0);
+  const othersRef = useRef(new Map<string, { name: string; trail: [number, number][] }>());
+  const liveRoute = useMemo(() => route.slice(cutIndex), [route, cutIndex]);
+  useEffect(() => {
+    routeLenRef.current = route.length;
+  }, [route]);
 
   const runMap = useCallback((js: string) => {
     if (Platform.OS === 'web') {
@@ -215,7 +289,6 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // 웹: SDK 직접 로드
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     if (!KAKAO_MAP_JS_KEY) {
@@ -227,15 +300,18 @@ export default function HomeScreen() {
     if (!document.getElementById('bion-map-style')) {
       const style = document.createElement('style');
       style.id = 'bion-map-style';
-      style.textContent =
-        `#map-container img { filter: ${MAP_FILTER}; }`;
+      style.textContent = `#map-container img { filter: ${MAP_FILTER}; }`;
       document.head.appendChild(style);
     }
     new Function(MAP_SCRIPT)();
 
     const init = () =>
       window.kakao.maps.load(() =>
-        (window as any).bionInit('map-container', DEFAULT_CENTER.latitude, DEFAULT_CENTER.longitude),
+        (window as any).bionInit(
+          'map-container',
+          DEFAULT_CENTER.latitude,
+          DEFAULT_CENTER.longitude,
+        ),
       );
 
     if (window.kakao?.maps) {
@@ -256,7 +332,6 @@ export default function HomeScreen() {
     return () => script?.removeEventListener('load', init);
   }, [handleMapEvent]);
 
-  // 현재 위치 표시
   useEffect(() => {
     if (!mapReady) return;
     const p = current ?? DEFAULT_CENTER;
@@ -264,28 +339,112 @@ export default function HomeScreen() {
     runMap(`window.bionSetCurrent(${p.latitude}, ${p.longitude}, ${offsetY})`);
   }, [mapReady, mapLoadCount, current, riding, panelHeight, runMap]);
 
-  // 경로: 새 점만 이어 그림 (지도가 늦게 준비되면 전체 다시 그림)
   useEffect(() => {
     if (!mapReady) return;
-    if (route.length < drawnCountRef.current || drawnCountRef.current === 0) {
-      const pts = route.map((p) => [p.latitude, p.longitude]);
+    if (liveRoute.length < drawnCountRef.current || drawnCountRef.current === 0) {
+      const pts = liveRoute.map((p) => [p.latitude, p.longitude]);
       runMap(`window.bionSetRoute(${JSON.stringify(pts)})`);
     } else {
-      route.slice(drawnCountRef.current).forEach((p) => {
+      liveRoute.slice(drawnCountRef.current).forEach((p) => {
         runMap(`window.bionAddPoint(${p.latitude}, ${p.longitude})`);
       });
     }
-    drawnCountRef.current = route.length;
-  }, [mapReady, mapLoadCount, route, runMap]);
+    drawnCountRef.current = liveRoute.length;
+  }, [mapReady, mapLoadCount, liveRoute, runMap]);
 
-  // 주소 조회
+  const drawOthers = useCallback(() => {
+    const list = [...othersRef.current.entries()].map(([id, o]) => ({
+      id,
+      ...o,
+    }));
+    runMap(`window.bionOthers(${JSON.stringify(list)})`);
+  }, [runMap]);
+
+  useEffect(() => {
+    const others = othersRef.current;
+    const unsub = subscribeLive((e) => {
+      const myId = getLiveId();
+      if (e.type === 'snapshot') {
+        others.clear();
+        e.riders.forEach(
+          (r) => r.id !== myId && others.set(r.id, { name: r.name, trail: r.trail }),
+        );
+      } else if (e.type === 'end') {
+        others.delete(e.id);
+      } else if (e.type === 'pos') {
+        if (e.id === myId) return;
+        const o = others.get(e.id) ?? { name: e.name, trail: [] };
+        o.trail.push([e.lat, e.lng]);
+        others.set(e.id, o);
+      } else if (e.type === 'cut') {
+        if (e.victim === myId) {
+          buzz(Haptics.NotificationFeedbackType.Error);
+          setCutIndex(Math.max(0, routeLenRef.current - 1));
+          setNotice({
+            text: `${e.byName}님이 경로를 끊었어요. 지금까지 달린 땅은 무효예요`,
+            bad: true,
+          });
+        } else {
+          const o = others.get(e.victim);
+          if (o) o.trail = o.trail.slice(-1);
+          if (e.by === myId)
+            setNotice({
+              text: `${e.victimName}님의 경로를 끊었어요!`,
+              bad: false,
+            });
+        }
+      }
+      drawOthers();
+    });
+    return unsub;
+  }, [drawOthers]);
+
+  // 내 위치 근처 라이더만 받음
+  useEffect(() => {
+    if (current) liveLocation(current.latitude, current.longitude);
+  }, [current]);
+
+  useEffect(() => {
+    if (mapReady) drawOthers();
+  }, [mapReady, mapLoadCount, drawOthers]);
+
+  useEffect(() => {
+    if (riding) {
+      sentRef.current = 0;
+      liveStart();
+    } else {
+      liveEnd();
+    }
+  }, [riding]);
+
+  useEffect(() => {
+    if (!riding) return;
+    route.slice(sentRef.current).forEach((p) => livePos(p.latitude, p.longitude));
+    sentRef.current = route.length;
+  }, [riding, route]);
+
+  // 라이딩 중 안드로이드 뒤로가기로 앱 화면이 닫히면 진행 중인 라이딩이 사라짐
+  useEffect(() => {
+    if (!riding) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setNotice({ text: '라이딩 중이에요. 끝내려면 종료 버튼을 눌러 주세요', bad: false });
+      return true;
+    });
+    return () => sub.remove();
+  }, [riding]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
+
   const firstPoint: LatLng | undefined = route[0];
   useEffect(() => {
     if (!mapReady || !firstPoint) return;
     runMap(`window.bionGeocode('start', ${firstPoint.latitude}, ${firstPoint.longitude})`);
   }, [mapReady, mapLoadCount, firstPoint, runMap]);
 
-  // 이번 라이딩에서 기록된 마지막 지점 기준 (이전 라이딩 위치가 남지 않도록)
   const lastPoint: LatLng | undefined = route[route.length - 1];
   useEffect(() => {
     if (!mapReady || !riding || !lastPoint) return;
@@ -296,10 +455,13 @@ export default function HomeScreen() {
   }, [mapReady, riding, lastPoint, runMap]);
 
   const handleStart = async () => {
+    setPanelOpen(true);
     setStartAddress(null);
     setCurrentAddress(null);
     lastGeocodeRef.current = 0;
     rideStartedAtRef.current = Date.now();
+    setCutIndex(0);
+    setNotice(null);
     let ok = false;
     try {
       ok = await start();
@@ -307,6 +469,7 @@ export default function HomeScreen() {
       console.warn('라이딩 시작 실패', e);
       stop();
     }
+    if (ok) buzz(Haptics.NotificationFeedbackType.Success);
     if (!ok) {
       const msg = '라이딩 기록을 위해 위치 권한이 필요합니다. 설정에서 권한을 허용해주세요.';
       if (Platform.OS === 'web') window.alert(msg);
@@ -314,12 +477,32 @@ export default function HomeScreen() {
     }
   };
 
-  // 라이딩 종료 → 기록을 넘겨주고 통계 화면으로 이동
+  const togglePause = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    if (paused) resume();
+    else pause();
+  };
+
+  const recenter = () => {
+    const p = current ?? DEFAULT_CENTER;
+    const offsetY = riding ? Math.round(panelHeight / 2) : 0;
+    runMap(`window.bionSetCurrent(${p.latitude}, ${p.longitude}, ${offsetY})`);
+  };
+
   const finishRide = async () => {
+    buzz(Haptics.NotificationFeedbackType.Success);
     const endedAt = Date.now();
     stop();
-    // 고도를 아직 못 받았으면 종료 시점에 한 번 더 측정
     const altitude = stats.altitude ?? (await measureAltitude());
+    await saveMyRide(liveRoute, {
+      at: rideStartedAtRef.current,
+      km: stats.distanceKm,
+      sec: stats.elapsedSec,
+      avg: stats.avgSpeedKmh ?? 0,
+      max: stats.maxSpeedKmh ?? 0,
+      gain: stats.elevationGain,
+      ...getSplits(),
+    }).catch(() => {});
     setLastRideSummary({
       startedAt: rideStartedAtRef.current,
       endedAt,
@@ -353,11 +536,7 @@ export default function HomeScreen() {
   return (
     <View style={styles.container}>
       {Platform.OS === 'web' ? (
-        <View
-          // @ts-ignore
-          id="map-container"
-          style={StyleSheet.absoluteFill}
-        />
+        <View id="map-container" style={StyleSheet.absoluteFill} />
       ) : (
         <WebView
           ref={webViewRef}
@@ -385,16 +564,44 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {riding && <KeepAwake />}
+      <Pressable
+        onPress={recenter}
+        hitSlop={8}
+        style={[styles.locateButton, { bottom: riding ? panelHeight + 12 : 120 }]}
+      >
+        <Ionicons name="locate" size={22} color="#fff" />
+      </Pressable>
+
       {riding ? (
         <View style={styles.panelWrap} pointerEvents="box-none">
-          {/* 지도 → 패널로 자연스럽게 어두워지는 단계형 그라데이션 */}
           {FADE_STEPS.map((opacity) => (
             <View key={opacity} style={[styles.fade, { opacity }]} />
           ))}
-          <View
-            style={styles.panel}
-            onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}
-          >
+          <View style={styles.panel} onLayout={(e) => setPanelHeight(e.nativeEvent.layout.height)}>
+            <Pressable style={styles.handle} onPress={() => setPanelOpen((v) => !v)} hitSlop={12}>
+              <View style={styles.handleBar} />
+              <Ionicons
+                name={panelOpen ? 'chevron-down' : 'chevron-up'}
+                size={16}
+                color="#8A8A8A"
+              />
+            </Pressable>
+            {paused && (
+              <View style={styles.pausedBadge}>
+                <Text style={styles.pausedText}>일시정지 중 · 시간과 거리가 멈춰 있어요</Text>
+              </View>
+            )}
+            {notice && (
+              <View style={[styles.notice, notice.bad && styles.noticeBad]}>
+                <Ionicons
+                  name={notice.bad ? 'cut' : 'flash'}
+                  size={16}
+                  color={notice.bad ? '#FF5A5F' : ORANGE}
+                />
+                <Text style={styles.noticeText}>{notice.text}</Text>
+              </View>
+            )}
             <View style={styles.row}>
               <View style={styles.col}>
                 <Text style={styles.label}>주행거리</Text>
@@ -406,47 +613,60 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            <View style={styles.divider} />
+            {panelOpen && (
+              <>
+                <View style={styles.divider} />
 
-            <View style={styles.row}>
-              <View style={styles.col}>
-                <Text style={styles.label}>평균속력</Text>
-                <Text style={styles.value}>{(stats.avgSpeedKmh ?? 0).toFixed(1)}km/h</Text>
-              </View>
-              <View style={styles.col}>
-                <Text style={styles.label}>최고속력</Text>
-                <Text style={styles.value}>{(stats.maxSpeedKmh ?? 0).toFixed(1)}km/h</Text>
-              </View>
-            </View>
-
-            <View style={styles.row}>
-              <View style={styles.col}>
-                <Text style={styles.label}>현재고도</Text>
-                <Text style={styles.value}>{dash(stats.altitude, 0, 'm')}</Text>
-              </View>
-              <View style={styles.col}>
-                <Text style={styles.label}>위치</Text>
-                <View style={styles.locRow}>
-                  <Ionicons name="location-outline" size={13} color={ORANGE} />
-                  <Text style={styles.locText} numberOfLines={1}>
-                    시작위치 {startAddress ?? '—'}
-                  </Text>
+                <View style={styles.row}>
+                  <View style={styles.col}>
+                    <Text style={styles.label}>평균속력</Text>
+                    <Text style={styles.value}>{(stats.avgSpeedKmh ?? 0).toFixed(1)}km/h</Text>
+                  </View>
+                  <View style={styles.col}>
+                    <Text style={styles.label}>최고속력</Text>
+                    <Text style={styles.value}>{(stats.maxSpeedKmh ?? 0).toFixed(1)}km/h</Text>
+                  </View>
                 </View>
-                <View style={styles.locRow}>
-                  <Ionicons name="location-outline" size={13} color={ORANGE} />
-                  <Text style={styles.locText} numberOfLines={1}>
-                    현재위치 {currentAddress ?? '—'}
-                  </Text>
-                </View>
-              </View>
-            </View>
 
-            <Pressable
-              onPress={handleStop}
-              style={({ pressed }) => [styles.stopButton, pressed && { opacity: 0.8 }]}
-            >
-              <Text style={styles.stopLabel}>라이딩 종료하기</Text>
-            </Pressable>
+                <View style={styles.row}>
+                  <View style={styles.col}>
+                    <Text style={styles.label}>현재고도</Text>
+                    <Text style={styles.value}>{dash(stats.altitude, 0, 'm')}</Text>
+                  </View>
+                  <View style={styles.col}>
+                    <Text style={styles.label}>위치</Text>
+                    <View style={styles.locRow}>
+                      <Ionicons name="location-outline" size={13} color={ORANGE} />
+                      <Text style={styles.locText} numberOfLines={1}>
+                        시작위치 {startAddress ?? '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.locRow}>
+                      <Ionicons name="location-outline" size={13} color={ORANGE} />
+                      <Text style={styles.locText} numberOfLines={1}>
+                        현재위치 {currentAddress ?? '—'}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </>
+            )}
+
+            <View style={styles.actions}>
+              <Pressable
+                onPress={togglePause}
+                style={({ pressed }) => [styles.pauseButton, pressed && { opacity: 0.8 }]}
+              >
+                <Ionicons name={paused ? 'play' : 'pause'} size={18} color="#fff" />
+                <Text style={styles.pauseLabel}>{paused ? '이어서' : '일시정지'}</Text>
+              </Pressable>
+              <Pressable
+                onPress={handleStop}
+                style={({ pressed }) => [styles.stopButton, pressed && { opacity: 0.8 }]}
+              >
+                <Text style={styles.stopLabel}>라이딩 종료하기</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       ) : (
@@ -528,8 +748,85 @@ const styles = StyleSheet.create({
     color: ORANGE,
     fontSize: 12,
   },
-  stopButton: {
+  handle: {
+    alignItems: 'center',
+    marginTop: -6,
+    marginBottom: -8,
+  },
+  handleBar: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#3A3A3A',
+    marginBottom: 2,
+  },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#1A1A1A',
+    borderWidth: 1,
+    borderColor: ORANGE,
+  },
+  noticeBad: {
+    borderColor: '#FF5A5F',
+  },
+  noticeText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: 10,
     marginTop: 6,
+  },
+  pauseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 52,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: '#262626',
+  },
+  pauseLabel: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  locateButton: {
+    position: 'absolute',
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(10,10,10,0.9)',
+    borderWidth: 1,
+    borderColor: '#3A3A3A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 11,
+    elevation: 11,
+  },
+  pausedBadge: {
+    alignSelf: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 100,
+    backgroundColor: '#262626',
+  },
+  pausedText: {
+    color: ORANGE,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  stopButton: {
+    flex: 1,
     height: 52,
     borderRadius: 14,
     backgroundColor: ORANGE,

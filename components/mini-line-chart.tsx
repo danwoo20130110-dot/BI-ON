@@ -5,13 +5,9 @@ type Props = {
   values: number[];
   color: string;
   height?: number;
-  // y축 값 표시 형식
   format?: (v: number) => string;
-  // 최소 y 범위 (값 변화가 거의 없을 때 그래프가 과장되지 않게)
   minSpan?: number;
-  // y축 최솟값 하한 (속도처럼 0 아래로 내려가면 안 되는 값)
   floor?: number;
-  // x축 왼쪽/오른쪽 라벨
   startLabel?: string;
   endLabel?: string;
 };
@@ -19,7 +15,6 @@ type Props = {
 const MAX_POINTS = 60;
 const GRID_ROWS = 3;
 
-// 점이 너무 많으면 구간 평균으로 줄임
 function downsample(values: number[]) {
   if (values.length <= MAX_POINTS) return values;
   const size = values.length / MAX_POINTS;
@@ -29,7 +24,6 @@ function downsample(values: number[]) {
   });
 }
 
-// react-native-svg 없이 View 로 그리는 간단한 꺾은선 그래프
 export function MiniLineChart({
   values,
   color,

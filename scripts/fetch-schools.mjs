@@ -1,15 +1,8 @@
-// 전국 초·중·고 학교 목록을 교육부 나이스(NEIS) 공식 API 로 받아 assets/data/schools.json 으로 저장
-//   1) https://open.neis.go.kr 회원가입 → 인증키 신청 (무료, 바로 발급)
-//   2) .env 에 NEIS_API_KEY=발급받은키 추가
-//   3) npm run fetch-schools
-// 학교가 새로 생기거나 이름이 바뀌면 다시 실행하면 됨.
-
 import fs from 'node:fs';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
 
-// .env 에서 NEIS_API_KEY 읽기
 function readKey() {
   if (process.env.NEIS_API_KEY) return process.env.NEIS_API_KEY;
   try {
@@ -30,7 +23,6 @@ if (!KEY) {
 const PAGE = 1000;
 const LEVELS = { 초등학교: 'E', 중학교: 'M', 고등학교: 'H' };
 
-// "서울특별시 송파구 위례서이로 10" → "서울 송파구"
 const SIDO_SHORT = {
   서울특별시: '서울', 부산광역시: '부산', 대구광역시: '대구', 인천광역시: '인천', 광주광역시: '광주',
   대전광역시: '대전', 울산광역시: '울산', 세종특별자치시: '세종', 경기도: '경기', 강원도: '강원',
@@ -62,7 +54,6 @@ for (let page = 1; ; page++) {
   if (list.length < PAGE) break;
 }
 
-// [이름, 지역, 학교급 코드(E/M/H/O)] — 앱 용량을 줄이려고 배열로 저장
 const seen = new Set();
 const schools = rows
   .filter((r) => r.SCHUL_NM && !r.SCHUL_NM.startsWith('(가칭)'))

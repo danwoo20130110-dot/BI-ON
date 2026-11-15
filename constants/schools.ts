@@ -1,6 +1,3 @@
-// 가입/프로필에서 고를 수 있는 학교
-//  - 초·중·고: assets/data/schools.json (교육부 나이스 공식 데이터, `npm run fetch-schools` 로 갱신)
-//  - 대학교: 나이스에 없어서 아래 목록으로 관리
 import schoolRows from '@/assets/data/schools.json';
 
 export type SchoolLevel = '초등학교' | '중학교' | '고등학교' | '대학교' | '기타';
@@ -8,7 +5,6 @@ export type School = { name: string; region: string; level: SchoolLevel };
 
 const LEVEL_CODE: Record<string, SchoolLevel> = { E: '초등학교', M: '중학교', H: '고등학교', O: '기타' };
 
-// [이름, 지역, 대학교] — 4년제 위주
 const UNIVERSITIES: [string, string][] = [
   ['서울대학교', '서울 관악구'], ['연세대학교', '서울 서대문구'], ['고려대학교', '서울 성북구'],
   ['서강대학교', '서울 마포구'], ['성균관대학교', '서울 종로구'], ['한양대학교', '서울 성동구'],
@@ -51,7 +47,6 @@ export const SCHOOLS: School[] = [
   ...UNIVERSITIES.map(([name, region]) => ({ name, region, level: '대학교' as const })),
 ];
 
-// 학교급별 학년 선택지
 export const GRADES: Record<SchoolLevel, string[]> = {
   초등학교: ['1학년', '2학년', '3학년', '4학년', '5학년', '6학년'],
   중학교: ['1학년', '2학년', '3학년'],
@@ -64,7 +59,6 @@ export function findSchool(name: string) {
   return SCHOOLS.find((s) => s.name === name);
 }
 
-// 목록에 없는 학교(검색·직접 입력)도 이름으로 학교급을 짐작
 export function schoolLevelOf(name: string): SchoolLevel {
   const known = findSchool(name)?.level;
   if (known) return known;

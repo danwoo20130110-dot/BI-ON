@@ -1,46 +1,39 @@
-import { Ionicons } from '@expo/vector-icons';
 import { Link } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Animated, Easing, Image, ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  ImageBackground,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const ORANGE = '#FFA51F';
-// 위·아래로 갈수록 어두워지는 단계형 그라데이션 (사진 위 글씨가 잘 보이도록)
-// 단계를 잘게 나눠 줄무늬가 보이지 않게 함
-const steps = (from: number, to: number, n: number) =>
-  Array.from({ length: n }, (_, i) => from + ((to - from) * i) / (n - 1));
-const TOP_FADE = steps(0.85, 0, 14);
-const BOTTOM_FADE = steps(0, 0.92, 24);
-
-const FEATURES = [
-  { icon: 'navigate', label: '실시간 라이딩 기록' },
-  { icon: 'flag', label: '땅따먹기' },
-  { icon: 'trophy', label: '학교 랭킹' },
-] as const;
-
-// 아래에서 살짝 올라오며 나타나는 애니메이션
-function useRise(delay: number) {
-  const [v] = useState(() => new Animated.Value(0));
-  useEffect(() => {
-    Animated.timing(v, {
-      toValue: 1,
-      duration: 700,
-      delay,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [v, delay]);
-  return {
-    opacity: v,
-    transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [24, 0] }) }],
-  };
-}
+import { authErrorText } from '@/hooks/use-auth';
+import { supabase } from '@/lib/supabase';
 
 export default function LoginScreen() {
-  const logo = useRise(100);
-  const copy = useRise(350);
-  const chips = useRise(600);
-  const buttons = useRise(850);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSubmit = email.trim().length > 3 && password.length >= 6 && !busy;
+
+  const login = async () => {
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    const { error: e } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setBusy(false);
+    // 성공하면 로그인 상태가 바뀌면서 자동으로 메인 화면으로 이동
+    if (e) setError(authErrorText(e.message));
+  };
 
   return (
     <ImageBackground
@@ -48,61 +41,57 @@ export default function LoginScreen() {
       style={s.bg}
       resizeMode="cover"
     >
-      <View style={s.fadeTop} pointerEvents="none">
-        {TOP_FADE.map((o, i) => (
-          <View key={i} style={[s.band, { opacity: o }]} />
-        ))}
-      </View>
-      <View style={s.fadeBottom} pointerEvents="none">
-        {BOTTOM_FADE.map((o, i) => (
-          <View key={i} style={[s.band, { opacity: o }]} />
-        ))}
-        <View style={[s.band, s.bandSolid]} />
-      </View>
-
-      <SafeAreaView style={s.container}>
-        <Animated.View style={[s.top, logo]}>
-          <Image source={require('../assets/images/BION.png')} style={s.logo} resizeMode="contain" />
-          <View style={s.season}>
-            <View style={s.liveDot} />
-            <Text style={s.seasonText}>2026 가을 시즌 진행 중</Text>
-          </View>
-        </Animated.View>
-
-        <View style={{ flex: 1 }} />
-
-        <Animated.View style={copy}>
-          <Text style={s.headline}>
-            달린 만큼{'\n'}
-            <Text style={s.accent}>내 땅</Text>이 된다
-          </Text>
-          <Text style={s.sub}>한 바퀴 돌면 안쪽 전체가, 쭉 달리면 지나간 길이 내 땅.{'\n'}우리 학교와 함께 도시를 차지해 보세요.</Text>
-        </Animated.View>
-
-        <Animated.View style={[s.chips, chips]}>
-          {FEATURES.map((f) => (
-            <View key={f.label} style={s.chip}>
-              <Ionicons name={f.icon} size={14} color={ORANGE} />
-              <Text style={s.chipText}>{f.label}</Text>
+      <View style={s.dim}>
+        <SafeAreaView style={s.container}>
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={s.center}>
+              <Image source={require('../assets/images/BION.png')} style={s.logo} resizeMode="contain" />
+              <Text style={s.title}>달린 만큼 내 땅이 된다</Text>
+              <Text style={s.desc}>자전거 타고 동네를 차지해 보세요</Text>
             </View>
-          ))}
-        </Animated.View>
 
-        <Animated.View style={[s.buttons, buttons]}>
-          <Link href="/(tabs)" asChild>
-            <Pressable style={s.login}>
-              <Text style={s.loginText}>로그인하기</Text>
-              <Ionicons name="arrow-forward" size={20} color="#000" />
-            </Pressable>
-          </Link>
+            <View style={s.form}>
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="이메일"
+                placeholderTextColor="#8A8A8A"
+                style={s.input}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="email"
+                textContentType="emailAddress"
+              />
+              <TextInput
+                value={password}
+                onChangeText={setPassword}
+                placeholder="비밀번호"
+                placeholderTextColor="#8A8A8A"
+                style={s.input}
+                secureTextEntry
+                autoCapitalize="none"
+                autoComplete="password"
+                textContentType="password"
+                onSubmitEditing={login}
+              />
+              {error && <Text style={s.error}>{error}</Text>}
 
-          <Link href="/signup" asChild>
-            <Pressable style={s.signup}>
-              <Text style={s.signupText}>학교 선택하고 회원가입</Text>
-            </Pressable>
-          </Link>
-        </Animated.View>
-      </SafeAreaView>
+              <Pressable onPress={login} disabled={!canSubmit} style={[s.login, !canSubmit && s.disabled]}>
+                {busy ? <ActivityIndicator color="#111" /> : <Text style={s.loginText}>로그인</Text>}
+              </Pressable>
+              <Link href="/signup" asChild>
+                <Pressable style={s.signup}>
+                  <Text style={s.signupText}>회원가입</Text>
+                </Pressable>
+              </Link>
+            </View>
+          </KeyboardAvoidingView>
+        </SafeAreaView>
+      </View>
     </ImageBackground>
   );
 }
@@ -112,129 +101,79 @@ const s = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
-  fadeTop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-  },
-  fadeBottom: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  band: {
-    height: 18,
-    backgroundColor: '#000',
-  },
-  bandSolid: {
-    height: 260,
-    opacity: 0.92,
+  dim: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
   },
   container: {
     flex: 1,
-    paddingHorizontal: 22,
-    paddingBottom: 12,
+    paddingHorizontal: 20,
   },
-  top: {
-    alignItems: 'flex-start',
-    paddingTop: 24,
-    gap: 14,
-  },
-  logo: {
-    width: 150,
-    height: 36,
-  },
-  season: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 100,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
-  },
-  liveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: ORANGE,
-  },
-  seasonText: {
-    color: '#EEEEEE',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  headline: {
-    color: '#FFFFFF',
-    fontSize: 40,
-    lineHeight: 50,
-    fontWeight: '800',
-    letterSpacing: -1,
-  },
-  accent: {
-    color: ORANGE,
-  },
-  sub: {
-    color: '#C8C8C8',
-    fontSize: 14,
-    lineHeight: 21,
-    marginTop: 12,
-  },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 20,
-    marginBottom: 28,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 100,
-    backgroundColor: 'rgba(255,165,31,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,165,31,0.35)',
-  },
-  chipText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  buttons: {
-    gap: 12,
-  },
-  login: {
-    flexDirection: 'row',
-    gap: 8,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: ORANGE,
+  center: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  logo: {
+    width: 200,
+    height: 46,
+  },
+  title: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '700',
+    marginTop: 24,
+  },
+  desc: {
+    color: '#bbb',
+    fontSize: 14,
+    marginTop: 6,
+  },
+  form: {
+    gap: 10,
+    paddingBottom: 17,
+  },
+  input: {
+    height: 50,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    color: '#fff',
+    fontSize: 16,
+    backgroundColor: 'rgba(20,20,20,0.85)',
+    borderWidth: 1,
+    borderColor: '#3A3A3A',
+  },
+  error: {
+    color: '#FF6B6B',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  login: {
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  disabled: {
+    opacity: 0.5,
+  },
   loginText: {
-    color: '#000',
-    fontSize: 18,
-    fontWeight: '800',
+    color: '#111',
+    fontSize: 17,
+    fontWeight: '700',
   },
   signup: {
-    height: 56,
-    borderRadius: 18,
+    height: 52,
+    borderRadius: 26,
     borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.7)',
+    borderColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
   },
   signupText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 17,
   },
 });

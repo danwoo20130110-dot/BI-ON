@@ -36,7 +36,6 @@ function formatTime(ms: number) {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
-// 평균 페이스 (1km 당 걸린 시간)
 function formatPace(distanceKm: number, elapsedSec: number) {
   if (distanceKm < 0.01) return '—';
   const secPerKm = Math.round(elapsedSec / distanceKm);
@@ -83,9 +82,7 @@ export default function RideSummaryScreen() {
   const hasRoute = route.length >= 2;
   const avg = stats.avgSpeedKmh ?? 0;
   const max = Math.max(stats.maxSpeedKmh ?? 0, avg);
-  const avgRatio = max > 0 ? avg / max : 0;
 
-  // 그래프: 시작(0초) 지점을 포함해 최소 2개 점이 되도록
   const speedSeries = [0, ...samples.map((s) => s.speedKmh)];
   const altSeries = samples.map((s) => s.altitude).filter((a): a is number => a != null);
   if (altSeries.length === 1) altSeries.push(altSeries[0]);
@@ -106,7 +103,6 @@ export default function RideSummaryScreen() {
           </Pressable>
         </View>
 
-        {/* 거리 + 시간 */}
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>주행거리</Text>
           <Text style={styles.heroValue}>
@@ -119,7 +115,6 @@ export default function RideSummaryScreen() {
           </View>
         </View>
 
-        {/* 지도 */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Ionicons name="map-outline" size={16} color={ORANGE} />
@@ -145,7 +140,6 @@ export default function RideSummaryScreen() {
           </View>
         </View>
 
-        {/* 속도 */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Ionicons name="speedometer-outline" size={16} color={ORANGE} />
@@ -154,16 +148,6 @@ export default function RideSummaryScreen() {
           <View style={styles.metricRow}>
             <Metric label="평균속력" value={avg.toFixed(1)} unit="km/h" big />
             <Metric label="최고속력" value={max.toFixed(1)} unit="km/h" color={ORANGE} big />
-          </View>
-          <View>
-            <View style={styles.barTrack}>
-              <View style={[styles.barFill, { width: `${Math.round(avgRatio * 100)}%` }]} />
-            </View>
-            <Text style={styles.barCaption}>
-              {max > 0
-                ? `평균속력은 최고속력의 ${Math.round(avgRatio * 100)}% 수준이에요`
-                : '이번 라이딩에서는 이동이 기록되지 않았어요'}
-            </Text>
           </View>
           <Text style={styles.chartTitle}>시간별 속도 (km/h)</Text>
           <MiniLineChart
@@ -176,7 +160,6 @@ export default function RideSummaryScreen() {
           />
         </View>
 
-        {/* 고도 */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Ionicons name="trending-up-outline" size={16} color={SKY} />
@@ -370,22 +353,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#BDBDBD',
-  },
-  barTrack: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#262626',
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    borderRadius: 4,
-    backgroundColor: ORANGE,
-  },
-  barCaption: {
-    color: '#9A9A9A',
-    fontSize: 12,
-    marginTop: 6,
   },
   chartTitle: {
     color: '#BDBDBD',

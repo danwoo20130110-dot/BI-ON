@@ -5,18 +5,43 @@ import { Dimensions, Pressable, ScrollView, StyleSheet, Text, View } from 'react
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ProfileAvatar } from '@/components/profile-avatar';
+import { useMyRides, type MyRide } from '@/hooks/my-rides-store';
 import { useProfile } from '@/hooks/use-profile';
+import { supabase } from '@/lib/supabase';
 
-const RIDES = [
-  { date: '2024.10.12', route: '서울 → 양평', distance: '45.2 km²', time: '2h 15m' },
-  { date: '2024.10.08', route: '한강 일주', distance: '32.1 km²', time: '1h 50m' },
-  { date: '2024.10.01', route: '도봉산 정복', distance: '28.5 km²', time: '2h 05m' },
-];
+type RideRow = { key: string; date: string; sub: string; distance: string; time: string };
 
-// 0 ~ 1 사이 값 (위로 갈수록 큼)
-const TREND = [0.75, 0.52, 0.7, 0.18, 0.3, 0.05, 1];
+const pad2 = (n: number) => String(n).padStart(2, '0');
 
-// 디자인 기준(iPhone 16, 393pt) 대비 화면 폭 비율로 크기 조정
+function toRow(r: MyRide): RideRow {
+  const st = r.stat!;
+  const d = new Date(st.at);
+  const h = Math.floor(st.sec / 3600);
+  const m = Math.floor((st.sec % 3600) / 60);
+  const per = st.km > 0.01 ? Math.round(st.sec / st.km) : 0;
+  return {
+    key: String(r.at),
+    date: `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
+    sub: `평균 ${st.avg.toFixed(1)}km/h · 1km ${Math.floor(per / 60)}'${pad2(per % 60)}"`,
+    distance: `${st.km.toFixed(2)} km`,
+    time: h > 0 ? `${h}h ${pad2(m)}m` : `${m}m ${pad2(st.sec % 60)}s`,
+  };
+}
+
+// 최근 7일 하루별 거리 (0~1 로 맞춤)
+function weekTrend(rides: MyRide[]) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const from = today.getTime() - (6 - i) * 86400000;
+    return rides
+      .filter((r) => r.stat && r.stat.at >= from && r.stat.at < from + 86400000)
+      .reduce((a, r) => a + (r.stat?.km ?? 0), 0);
+  });
+  const max = Math.max(...days);
+  return max > 0 ? days.map((v) => v / max) : days;
+}
+
 const scale = Dimensions.get('window').width / 393;
 const rs = (n: number) => Math.round(n * scale);
 
@@ -27,7 +52,7 @@ const GRID_ROWS = 3;
 const LINE_W = rs(3);
 const DOT = rs(8);
 
-function TrendChart() {
+function TrendChart({ values: TREND }: { values: number[] }) {
   const [width, setWidth] = useState(0);
 
   const points = TREND.map((v, i) => ({
@@ -83,6 +108,12 @@ function TrendChart() {
 
 export default function ProfileScreen() {
   const { profile } = useProfile();
+  const myRides = useMyRides().filter((r) => r.stat);
+  const hasRides = myRides.length > 0;
+  const rows = myRides.slice(-3).reverse().map(toRow);
+  const trend = weekTrend(myRides);
+  const totalKm = myRides.reduce((a, r) => a + (r.stat?.km ?? 0), 0);
+  const bestSpeed = myRides.reduce((a, r) => Math.max(a, r.stat?.max ?? 0), 0);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -119,14 +150,30 @@ export default function ProfileScreen() {
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>최근 라이딩 기록</Text>
-            <Text style={styles.cardCaption}>예시 데이터 (가상)</Text>
           </View>
+          {hasRides && (
+            <View style={styles.totals}>
+              <View style={styles.total}>
+                <Text style={styles.totalValue}>{myRides.length}회</Text>
+                <Text style={styles.totalLabel}>라이딩</Text>
+              </View>
+              <View style={styles.total}>
+                <Text style={styles.totalValue}>{totalKm.toFixed(1)}km</Text>
+                <Text style={styles.totalLabel}>총 거리</Text>
+              </View>
+              <View style={styles.total}>
+                <Text style={styles.totalValue}>{bestSpeed.toFixed(1)}km/h</Text>
+                <Text style={styles.totalLabel}>최고속력</Text>
+              </View>
+            </View>
+          )}
           <View style={styles.rideList}>
-            {RIDES.map((ride) => (
-              <View key={ride.date} style={styles.rideItem}>
-                <View>
+            {!hasRides && <Text style={styles.rideSub}>아직 라이딩 기록이 없어요. 첫 라이딩을 시작해 보세요!</Text>}
+            {rows.map((ride) => (
+              <View key={ride.key} style={styles.rideItem}>
+                <View style={{ flexShrink: 1 }}>
                   <Text style={styles.rideMain}>{ride.date}</Text>
-                  <Text style={styles.rideSub}>{ride.route}</Text>
+                  <Text style={styles.rideSub}>{ride.sub}</Text>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
                   <Text style={styles.rideMain}>{ride.distance}</Text>
@@ -139,13 +186,12 @@ export default function ProfileScreen() {
 
         <View style={styles.card}>
           <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>최근 라이딩 추이</Text>
-            <Text style={styles.cardCaption}>예시 데이터 (가상)</Text>
+            <Text style={styles.cardTitle}>최근 7일 라이딩</Text>
           </View>
-          <TrendChart />
+          <TrendChart values={trend} />
         </View>
 
-        <Pressable style={styles.logout} onPress={() => router.replace('/login')}>
+        <Pressable style={styles.logout} onPress={() => supabase.auth.signOut()}>
           <Text style={styles.logoutText}>로그아웃</Text>
         </Pressable>
       </ScrollView>
@@ -154,6 +200,24 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  totals: {
+    flexDirection: 'row',
+    paddingVertical: rs(6),
+  },
+  total: {
+    flex: 1,
+    alignItems: 'center',
+    gap: rs(2),
+  },
+  totalValue: {
+    color: '#FFA51F',
+    fontSize: rs(16),
+    fontWeight: '700',
+  },
+  totalLabel: {
+    color: '#9A9A9A',
+    fontSize: rs(11),
+  },
   container: {
     flex: 1,
     backgroundColor: '#000000',
@@ -221,10 +285,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: rs(17),
     fontWeight: '700',
-  },
-  cardCaption: {
-    color: '#BDBDBD',
-    fontSize: rs(11),
   },
   rideList: {
     gap: rs(10),

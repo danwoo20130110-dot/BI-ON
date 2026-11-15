@@ -17,11 +17,9 @@ import { canSearchOnline, searchSchools } from '@/lib/school-search';
 const ORANGE = '#FFA51F';
 const LEVELS: ('전체' | SchoolLevel)[] = ['전체', '초등학교', '중학교', '고등학교', '대학교', '기타'];
 const MAX_RESULTS = 100;
-// 입력이 멈추고 이 시간(ms) 뒤에 전국 검색
 const SEARCH_DELAY_MS = 350;
 
 const norm = (t: string) => t.replace(/\s/g, '');
-// 검색용으로 미리 공백 없는 이름/지역을 만들어 둠
 const INDEX = SCHOOLS.map((s) => ({ school: s, key: norm(s.name) + '|' + norm(s.region) }));
 
 type Props = {
@@ -29,7 +27,6 @@ type Props = {
   onSelect: (school: School) => void;
 };
 
-// 학교 검색(전국, 카카오) + 학교급 필터 + 목록에 없으면 직접 입력
 export function SchoolPicker({ selected, onSelect }: Props) {
   const [query, setQuery] = useState('');
   const [level, setLevel] = useState<(typeof LEVELS)[number]>('전체');
@@ -39,7 +36,6 @@ export function SchoolPicker({ selected, onSelect }: Props) {
   const trimmed = query.trim();
   const searching = canSearchOnline && trimmed.length >= 2 && online.query !== trimmed && !error;
 
-  // 입력이 멈추면 전국 학교 검색 (이전 요청은 취소)
   useEffect(() => {
     if (!canSearchOnline || trimmed.length < 2) return;
     const ctrl = new AbortController();
@@ -62,7 +58,6 @@ export function SchoolPicker({ selected, onSelect }: Props) {
   const q = norm(trimmed);
   const byLevel = (s: School) => level === '전체' || s.level === level;
 
-  // 전국 검색 결과를 먼저, 그 뒤에 기본 목록에서 찾은 학교 (중복 제외)
   const remote = online.query === trimmed ? online.schools.filter(byLevel) : [];
   const seen = new Set(remote.map((s) => `${s.name}|${s.region}`));
   const local = INDEX.filter((e) => byLevel(e.school) && (q === '' || e.key.includes(q)))
@@ -137,7 +132,7 @@ export function SchoolPicker({ selected, onSelect }: Props) {
                 <Text style={styles.region}>찾는 학교가 없어요</Text>
               </View>
             </Pressable>
-          ) : null
+          ) : undefined
         }
         renderItem={({ item }) => {
           const active = item.name === selected;

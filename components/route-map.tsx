@@ -1,18 +1,16 @@
 import { createElement, useMemo } from 'react';
 import { Platform, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
-import { WebView } from 'react-native-webview';
 
+import { WebView } from '@/lib/webview';
 import { DEFAULT_CENTER, KAKAO_SDK_URL, MAP_BASE_URL, MAP_TILE_FILTER } from '@/constants/kakao-map';
 import type { LatLng } from '@/hooks/use-ride-tracker';
 
 type Props = {
   route: LatLng[];
-  // 경로가 없을 때 지도 중심
   center?: LatLng | null;
   style?: StyleProp<ViewStyle>;
 };
 
-// 라이딩 경로를 보여주는 정적 카카오 지도 (경로가 없으면 위치만 표시)
 export function RouteMap({ route, center, style }: Props) {
   const html = useMemo(() => {
     const points = route.map((p) => [p.latitude, p.longitude]);
@@ -58,7 +56,6 @@ export function RouteMap({ route, center, style }: Props) {
           } else {
             new kakao.maps.CustomOverlay({ map: map, position: center, content: pin('현재', '#FFA51F', '#000'), yAnchor: 0.5 });
           }
-          // WebView 크기가 늦게 잡히면 중심이 어긋나므로 크기가 바뀔 때마다 다시 맞춤
           function refit() {
             map.relayout();
             if (bounds) map.setBounds(bounds, 40, 40, 40, 40);

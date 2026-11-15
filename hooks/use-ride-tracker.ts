@@ -2,6 +2,9 @@ import * as Location from 'expo-location';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
+import { watchRideLocation } from '@/lib/background-location';
+import { createGpsFilter } from '@/lib/gps-filter';
+
 export type LatLng = { latitude: number; longitude: number };
 
 export type RideStats = {
@@ -12,25 +15,16 @@ export type RideStats = {
   altitude: number | null;
   minAltitude: number | null;
   maxAltitude: number | null;
-  // 누적 상승 고도(m)
   elevationGain: number;
 };
 
-// 통계 화면 그래프용 시간별 기록
 export type RideSample = { t: number; speedKmh: number; altitude: number | null };
 
-// 정확도가 이보다 나쁜(m) 위치는 거리 계산에서 제외
-const MAX_ACCURACY_M = 30;
-// GPS 튐 방지: 이보다 짧은 이동(m)은 누적하지 않음
 const MIN_STEP_M = 3;
-// 자전거로 불가능한 속도(GPS 튐)는 최고속력에서 제외
 const MAX_SPEED_KMH = 90;
 const MIN_GPS_SPEED_MS = 0.5;
-// 이 시간(ms) 동안 위치 갱신이 없으면 멈춘 것으로 보고 속도 0
 const IDLE_MS = 5000;
-// 그래프용 기록 간격(초)
 const SAMPLE_EVERY_SEC = 2;
-// GPS 고도 흔들림 무시 기준(m)
 const ALT_NOISE_M = 2;
 
 const EMPTY_STATS: RideStats = {
@@ -57,23 +51,28 @@ function haversineM(a: LatLng, b: LatLng) {
 
 export function useRideTracker() {
   const [riding, setRiding] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [current, setCurrent] = useState<LatLng | null>(null);
   const [route, setRoute] = useState<LatLng[]>([]);
   const [stats, setStats] = useState<RideStats>(EMPTY_STATS);
 
-  const subRef = useRef<Location.LocationSubscription | null>(null);
+  const subRef = useRef<{ remove: () => void } | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef(0);
+  // 일시정지한 시각 (0 이면 달리는 중). 다시 시작하면 멈춘 시간만큼 출발 시각을 뒤로 미룸
+  const pausedAtRef = useRef(0);
   const distanceMRef = useRef(0);
+  // 1km 를 지날 때마다 출발 후 경과 시간(초)
+  const kmMarksRef = useRef<number[]>([]);
   const lastPointRef = useRef<LatLng | null>(null);
+  const gpsFilterRef = useRef(createGpsFilter());
   const lastTimeRef = useRef(0);
   const samplesRef = useRef<RideSample[]>([]);
   const speedRef = useRef({ kmh: 0, at: 0 });
   const altitudeRef = useRef<number | null>(null);
   const altBaseRef = useRef<number | null>(null);
 
-  // 고도 반영: 현재/최고/최저 + 노이즈를 걸러 상승 고도 누적
   const applyAltitude = useCallback((alt: number | null | undefined) => {
     if (alt == null || Number.isNaN(alt)) return;
     altitudeRef.current = alt;
@@ -101,7 +100,6 @@ export function useRideTracker() {
       setPermissionDenied(!granted);
       if (!granted) return false;
 
-      // 휴대폰 위치(GPS) 기능이 꺼져 있으면 켜달라고 요청 (안드로이드는 시스템 팝업)
       if (!(await Location.hasServicesEnabledAsync())) {
         if (Platform.OS !== 'android') return false;
         await Location.enableNetworkProviderAsync();
@@ -114,11 +112,9 @@ export function useRideTracker() {
     }
   }, []);
 
-  // 첫 화면에서 지도 중심을 내 위치로
   useEffect(() => {
     (async () => {
       if (!(await ensurePermission())) return;
-      // 마지막으로 알려진 위치를 먼저 쓰고, 가능하면 현재 위치로 갱신
       const last = await Location.getLastKnownPositionAsync();
       if (last) setCurrent({ latitude: last.coords.latitude, longitude: last.coords.longitude });
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -135,35 +131,12 @@ export function useRideTracker() {
 
   useEffect(() => stopWatching, []);
 
-  const start = useCallback(async () => {
-    if (!(await ensurePermission())) return false;
+  const elapsedNow = () => ((pausedAtRef.current || Date.now()) - startedAtRef.current) / 1000;
 
-    stopWatching();
-    startedAtRef.current = Date.now();
-    distanceMRef.current = 0;
-    lastPointRef.current = null;
-    samplesRef.current = [];
-    speedRef.current = { kmh: 0, at: 0 };
-    altitudeRef.current = null;
-    altBaseRef.current = null;
-    setRoute([]);
-    setStats(EMPTY_STATS);
-    setRiding(true);
-
-    // 출발하자마자 고도/위치가 보이도록 현재 위치 한 번 받아옴
-    Location.getLastKnownPositionAsync()
-      .then((pos) => pos && applyAltitude(pos.coords.altitude))
-      .catch(() => {});
-    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-      .then((pos) => {
-        applyAltitude(pos.coords.altitude);
-        setCurrent((c) => c ?? { latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-      })
-      .catch(() => {});
-
+  const beginTracking = useCallback(async () => {
     timerRef.current = setInterval(() => {
       const now = Date.now();
-      const elapsedSec = Math.floor((now - startedAtRef.current) / 1000);
+      const elapsedSec = Math.floor(elapsedNow());
       setStats((s) => ({
         ...s,
         elapsedSec,
@@ -179,22 +152,31 @@ export function useRideTracker() {
       }
     }, 1000);
 
-    subRef.current = await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 2 },
+    subRef.current = await watchRideLocation(
       ({ coords, timestamp }) => {
-        const point = { latitude: coords.latitude, longitude: coords.longitude };
-        setCurrent(point);
+        setCurrent({ latitude: coords.latitude, longitude: coords.longitude });
         applyAltitude(coords.altitude);
 
-        if (coords.accuracy != null && coords.accuracy > MAX_ACCURACY_M) return;
+        // 튄 점은 경로·거리에서 빼고, 남은 점은 부드럽게 이음
+        const point = gpsFilterRef.current.push({
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          accuracy: coords.accuracy,
+          speed: coords.speed,
+          time: timestamp,
+        });
+        if (!point) return;
 
         const last = lastPointRef.current;
         if (last) {
           const step = haversineM(last, point);
           if (step < MIN_STEP_M) return;
           distanceMRef.current += step;
+          const elapsed = elapsedNow();
+          while (distanceMRef.current >= (kmMarksRef.current.length + 1) * 1000) {
+            kmMarksRef.current.push(elapsed);
+          }
 
-          // GPS 속도가 없거나(null) 거의 0인데 실제로 이동했으면 이동 거리 ÷ 시간으로 계산
           const dtSec = (timestamp - lastTimeRef.current) / 1000;
           const gpsKmh =
             coords.speed != null && coords.speed > MIN_GPS_SPEED_MS ? coords.speed * 3.6 : null;
@@ -218,17 +200,78 @@ export function useRideTracker() {
       },
       (reason) => console.warn('위치 추적 에러', reason),
     );
+    if (pausedAtRef.current) stopWatching();
+  }, [applyAltitude]);
+
+  const start = useCallback(async () => {
+    if (!(await ensurePermission())) return false;
+
+    stopWatching();
+    startedAtRef.current = Date.now();
+    pausedAtRef.current = 0;
+    setPaused(false);
+    distanceMRef.current = 0;
+    kmMarksRef.current = [];
+    lastPointRef.current = null;
+    gpsFilterRef.current.reset();
+    samplesRef.current = [];
+    speedRef.current = { kmh: 0, at: 0 };
+    altitudeRef.current = null;
+    altBaseRef.current = null;
+    setRoute([]);
+    setStats(EMPTY_STATS);
+    setRiding(true);
+
+    Location.getLastKnownPositionAsync()
+      .then((pos) => pos && applyAltitude(pos.coords.altitude))
+      .catch(() => {});
+    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+      .then((pos) => {
+        applyAltitude(pos.coords.altitude);
+        setCurrent((c) => c ?? { latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+      })
+      .catch(() => {});
+
+    await beginTracking();
     return true;
-  }, [ensurePermission, applyAltitude]);
+  }, [ensurePermission, applyAltitude, beginTracking]);
+
+  const pause = useCallback(() => {
+    if (pausedAtRef.current) return;
+    stopWatching();
+    pausedAtRef.current = Date.now();
+    setPaused(true);
+  }, []);
+
+  const resume = useCallback(async () => {
+    if (!pausedAtRef.current) return;
+    startedAtRef.current += Date.now() - pausedAtRef.current;
+    pausedAtRef.current = 0;
+    // 멈춘 동안 이동한 거리는 세지 않음
+    lastPointRef.current = null;
+    gpsFilterRef.current.reset();
+    setPaused(false);
+    await beginTracking();
+  }, [beginTracking]);
 
   const stop = useCallback(() => {
     stopWatching();
     setRiding(false);
+    setPaused(false);
   }, []);
 
   const getSamples = useCallback(() => [...samplesRef.current], []);
 
-  // 종료 시 고도를 아직 못 받았으면 한 번 더 측정
+  // 1km 구간별 걸린 시간(초). 마지막 1km 미만 구간은 따로
+  const getSplits = useCallback(() => {
+    const marks = kmMarksRef.current;
+    const total = elapsedNow();
+    const splits = marks.map((t, i) => Math.round(t - (marks[i - 1] ?? 0)));
+    const restKm = distanceMRef.current / 1000 - marks.length;
+    const last = restKm > 0.05 ? { km: restKm, sec: Math.round(total - (marks[marks.length - 1] ?? 0)) } : null;
+    return { splits, last };
+  }, []);
+
   const measureAltitude = useCallback(async () => {
     if (altitudeRef.current != null) return altitudeRef.current;
     try {
@@ -241,6 +284,9 @@ export function useRideTracker() {
 
   return {
     riding,
+    paused,
+    pause,
+    resume,
     permissionDenied,
     current,
     route,
@@ -248,6 +294,7 @@ export function useRideTracker() {
     start,
     stop,
     getSamples,
+    getSplits,
     measureAltitude,
   };
 }

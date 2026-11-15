@@ -7,7 +7,6 @@ type Props = {
   size: number;
 };
 
-// 사진이 있으면 사진, 없으면 닉네임 첫 글자
 export function ProfileAvatar({ nickname, photoUri, size }: Props) {
   const box = { width: size, height: size, borderRadius: size / 2 };
   if (photoUri) {

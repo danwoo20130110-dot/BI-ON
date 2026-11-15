@@ -1,5 +1,3 @@
-// 전국 학교 검색: 카카오 로컬 API(학교 카테고리 SC4)로 입력할 때마다 바로 검색
-// (검색 결과를 미리 받아 저장하지 않고 그때그때 조회)
 import type { School, SchoolLevel } from '@/constants/schools';
 
 const REST_KEY = process.env.EXPO_PUBLIC_KAKAO_REST_KEY;
@@ -16,7 +14,6 @@ function levelOf(category: string): SchoolLevel {
   return '기타';
 }
 
-// "서울 중구 정동 32-1" → "서울 중구"
 const regionOf = (address: string) => address.split(' ').slice(0, 2).join(' ');
 
 export const canSearchOnline = !!REST_KEY;

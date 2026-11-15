@@ -1,87 +1,48 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { createElement, useCallback, useEffect, useRef, useState } from 'react';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { WebView } from 'react-native-webview';
 
+import { WebView } from '@/lib/webview';
 import { DEFAULT_CENTER, MAP_BASE_URL } from '@/constants/kakao-map';
+import { LandCard, type LandInfo } from '@/components/land-card';
+import { refreshMyRides } from '@/hooks/my-rides-store';
+import { useAuth } from '@/hooks/use-auth';
 import { useProfile } from '@/hooks/use-profile';
+import {
+  fetchLandAt,
+  fetchLands,
+  fetchStats,
+  areaParts,
+  formatArea,
+  schoolKeyOf,
+  type Bounds,
+  type TerritoryStats,
+} from '@/lib/territory';
 import { ME_COLOR, TERRITORY_MAP_HTML } from '@/lib/territory-map-html';
 
-// 모듈 상수로 두어 화면이 다시 그려져도 WebView 가 새로 로드되지 않게 함
 const MAP_SOURCE = { html: TERRITORY_MAP_HTML, baseUrl: MAP_BASE_URL };
-// 위치를 이 시간 안에 못 받으면 기본 위치(서울시청) 기준으로 시작
 const LOCATION_WAIT_MS = 2500;
+const BOUNDS_DELAY_MS = 250;
 
-type Ranked = { name: string; color: string; me: boolean; area: number; count: number };
-type SchoolRanked = {
-  name: string;
-  color: string;
-  mine: boolean;
-  area: number;
-  riders: number;
-  count: number;
-  rank?: number;
-};
-type Stats = {
-  top: Ranked[];
-  myRank: number;
-  myArea: number;
-  myLoops: number;
-  myLines: number;
-  players: number;
-  // 학교 기록 = 소속 라이더 땅의 합
-  schoolTop: SchoolRanked[];
-  mySchool: SchoolRanked | null;
-  schoolCount: number;
-};
 type Mode = 'personal' | 'school';
-type Capture = {
-  who: string;
-  where: string;
-  km: number;
-  area: number;
-  loop: boolean;
-  fromMe: boolean;
-  school: string | null;
-  mySchoolLost: boolean;
-  mySchoolGained: boolean;
-  // 이번에 없어진 남의 땅 수와 그 주인들
-  erased: number;
-  victims: string[];
-};
-
-function captureText(t: Capture, mode: Mode) {
-  const how = t.loop ? `한 바퀴 돌아 ${t.area.toFixed(1)}km²를` : `${t.km.toFixed(1)}km 달려 땅을`;
-  if (mode === 'school') {
-    const who = t.school ? `${t.school} ${t.who}님` : `${t.who}님`;
-    if (t.mySchoolGained) return `우리 학교 ${t.who}님이 ${t.where}에서 ${how} 차지했어요!`;
-    if (t.mySchoolLost) return `${who}이 ${t.where}에서 우리 학교 땅을 뺏었어요!`;
-    return `${who}이 ${t.where}에서 ${how} 차지했어요`;
-  }
-  if (t.fromMe) return `${t.who}님이 ${t.where}에서 ${how} 차지해서 내 땅이 없어졌어요!`;
-  if (t.erased > 0) {
-    const names = t.victims.join(', ') + (t.victims.length < t.erased ? ' 등' : '');
-    return `${t.who}님이 ${t.where}에서 ${how} 차지 · ${names}님 땅 ${t.erased}곳 삭제`;
-  }
-  return `${t.who}님이 ${t.where}에서 ${how} 차지했어요`;
-}
-
 export default function TerritoryScreen() {
-  const { profile, ready: profileReady } = useProfile();
+  const { userId } = useAuth();
+  const { profile } = useProfile();
   const webViewRef = useRef<WebView>(null);
-  // 웹 전용: 지도 iframe 요소
   const [iframe, setIframe] = useState<HTMLIFrameElement | null>(null);
   const startedRef = useRef(false);
-  // 지도 페이지가 (다시) 로드될 때마다 증가 → 땅 생성/시뮬레이션을 다시 시작
+  const boundsRef = useRef<Bounds | null>(null);
+  const boundsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [mapLoadCount, setMapLoadCount] = useState(0);
   const mapReady = mapLoadCount > 0;
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [toast, setToast] = useState<Capture | null>(null);
+  const [stats, setStats] = useState<TerritoryStats | null>(null);
   const [mode, setMode] = useState<Mode>('personal');
-  const mySchool = profile.school.trim() || null;
+  const [expanded, setExpanded] = useState(false);
+  const [land, setLand] = useState<LandInfo | null>(null);
+  const mySchoolKey = schoolKeyOf(profile.school, profile.schoolRegion);
 
   const runMap = useCallback(
     (js: string) => {
@@ -91,30 +52,78 @@ export default function TerritoryScreen() {
     [iframe],
   );
 
-  // 내 위치 기준으로 가상 땅을 한 번 만들고 시뮬레이션 시작
-  const start = useCallback(
-    (lat: number, lng: number) => {
-      if (startedRef.current || !profileReady) return;
-      startedRef.current = true;
-      runMap(
-        `window.bionStart(${lat}, ${lng}, ${JSON.stringify(profile.nickname)}, ${JSON.stringify(mySchool)})`,
-      );
-    },
-    [runMap, profileReady, profile.nickname, mySchool],
+  // 지금 보이는 범위의 땅을 서버에서 받아 지도에 그림
+  const loadLands = useCallback(async () => {
+    const b = boundsRef.current;
+    if (!b) return;
+    const lands = await fetchLands(b, userId, mySchoolKey);
+    if (lands) runMap(`window.bionSetLands(${JSON.stringify(lands)})`);
+  }, [runMap, userId, mySchoolKey]);
+
+  const loadStats = useCallback(async () => {
+    const s = await fetchStats(userId);
+    if (s) setStats(s);
+  }, [userId]);
+
+  // 화면에 들어올 때마다: 못 올린 라이딩을 올리고(서버가 땅 계산) 땅·순위를 새로 받음
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      refreshMyRides()
+        .catch(() => {})
+        .then(() => {
+          if (!alive) return;
+          loadLands();
+          loadStats();
+        });
+      return () => {
+        alive = false;
+      };
+    }, [loadLands, loadStats]),
   );
 
-  const handleEvent = useCallback((type: string, payload: any) => {
-    if (type === 'ready') {
-      startedRef.current = false;
-      setStats(null);
-      setMapLoadCount((c) => c + 1);
-    }
-    else if (type === 'stats') setStats(payload);
-    else if (type === 'capture') setToast(payload);
-    else if (type === 'error') console.error('Territory map error:', payload);
+  const start = useCallback(
+    (lat: number, lng: number) => {
+      if (startedRef.current) return;
+      startedRef.current = true;
+      runMap(`window.bionStart(${lat}, ${lng})`);
+    },
+    [runMap],
+  );
+
+  const openLand = useCallback(
+    async (tap: { owner: string; color: string; lat: number; lng: number } | null) => {
+      if (!tap) {
+        setLand(null);
+        return;
+      }
+      const info = await fetchLandAt(tap.owner, tap.lat, tap.lng, tap.color, userId);
+      setLand(info);
+      if (!info) runMap('window.bionHideTap()');
+    },
+    [runMap, userId],
+  );
+
+  const handleEvent = useCallback(
+    (type: string, payload: any) => {
+      if (type === 'ready') {
+        startedRef.current = false;
+        boundsRef.current = null;
+        setMapLoadCount((c) => c + 1);
+      } else if (type === 'bounds') {
+        boundsRef.current = payload;
+        if (boundsTimer.current) clearTimeout(boundsTimer.current);
+        boundsTimer.current = setTimeout(loadLands, BOUNDS_DELAY_MS);
+      } else if (type === 'tap') openLand(payload);
+      else if (type === 'error') console.error('Territory map error:', payload);
+    },
+    [loadLands, openLand],
+  );
+
+  useEffect(() => () => {
+    if (boundsTimer.current) clearTimeout(boundsTimer.current);
   }, []);
 
-  // 웹: iframe 에서 오는 메시지
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const onMessage = (e: MessageEvent) => {
@@ -128,7 +137,6 @@ export default function TerritoryScreen() {
     return () => window.removeEventListener('message', onMessage);
   }, [handleEvent, iframe]);
 
-  // 위치를 못 받으면 서울시청 기준으로 시작
   useEffect(() => {
     if (!mapReady) return;
     const t = setTimeout(
@@ -138,7 +146,6 @@ export default function TerritoryScreen() {
     return () => clearTimeout(t);
   }, [mapReady, mapLoadCount, start]);
 
-  // 내 위치: 처음 위치로 땅을 만들고, 이후엔 내 점만 따라 움직임
   useEffect(() => {
     if (!mapReady) return;
     let sub: Location.LocationSubscription | null = null;
@@ -166,20 +173,13 @@ export default function TerritoryScreen() {
     };
   }, [mapReady, mapLoadCount, runMap, start]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const t = setTimeout(() => setToast(null), 3000);
-    return () => clearTimeout(t);
-  }, [toast]);
 
-  // 보기 전환 (지도가 다시 로드돼도 현재 보기 유지)
   useEffect(() => {
     if (mapReady) runMap(`window.bionSetMode(${JSON.stringify(mode)})`);
   }, [mapReady, mapLoadCount, mode, runMap]);
 
   const myInTop = stats?.top.some((r) => r.me);
   const mySchoolInTop = stats?.schoolTop?.some((r) => r.mine);
-  const toastAlert = !!toast && (mode === 'school' ? toast.mySchoolLost : toast.fromMe);
 
   return (
     <View style={styles.container}>
@@ -212,43 +212,49 @@ export default function TerritoryScreen() {
             <Text style={styles.subText}>
               {mode === 'school'
                 ? `학교 ${stats?.schoolCount ?? '—'}곳`
-                : `수도권 라이더 ${stats?.players ?? '—'}명`}{' '}
-              · 예시 데이터 (가상)
+                : `라이더 ${stats?.players ?? '—'}명`}
             </Text>
           </View>
-          <View style={styles.liveBadge}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>실시간</Text>
+          <View style={styles.modeToggle}>
+            {(['personal', 'school'] as const).map((m) => (
+              <Pressable
+                key={m}
+                onPress={() => setMode(m)}
+                style={[styles.modeBtn, mode === m && styles.modeBtnActive]}
+              >
+                <Text style={[styles.modeText, mode === m && styles.modeTextActive]}>
+                  {m === 'personal' ? '개인' : '학교'}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         </View>
-        <View style={styles.modeToggle}>
-          {(['personal', 'school'] as const).map((m) => (
-            <Pressable
-              key={m}
-              onPress={() => setMode(m)}
-              style={[styles.modeBtn, mode === m && styles.modeBtnActive]}
-            >
-              <Text style={[styles.modeText, mode === m && styles.modeTextActive]}>
-                {m === 'personal' ? '개인' : '학교'}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-        {toast && (
-          <View style={[styles.toast, toastAlert && styles.toastAlert]}>
-            <Ionicons
-              name={toastAlert ? 'alert-circle' : 'flag'}
-              size={14}
-              color={toastAlert ? '#FF5A5F' : ME_COLOR}
-            />
-            <Text style={styles.toastText} numberOfLines={2}>
-              {captureText(toast, mode)}
-            </Text>
-          </View>
-        )}
       </SafeAreaView>
 
-      <View style={styles.panel} pointerEvents="box-none">
+      <Pressable
+        onPress={() => runMap('window.bionCenterMe()')}
+        hitSlop={8}
+        style={[styles.locateButton, { bottom: land ? 300 : expanded ? 250 : 120 }]}
+      >
+        <Ionicons name="locate" size={22} color="#fff" />
+      </Pressable>
+
+      {land && (
+        <LandCard
+          land={land}
+          onClose={() => {
+            setLand(null);
+            runMap('window.bionHideTap()');
+          }}
+        />
+      )}
+
+      <View style={[styles.panel, land && { display: 'none' }]} pointerEvents="box-none">
+        <Pressable style={styles.handle} onPress={() => setExpanded((v) => !v)} hitSlop={8}>
+          <View style={styles.handleBar} />
+          <Text style={styles.handleText}>{expanded ? '순위 접기' : '순위 보기'}</Text>
+          <Ionicons name={expanded ? 'chevron-down' : 'chevron-up'} size={14} color="#8A8A8A" />
+        </Pressable>
         {mode === 'school' ? (
           <>
             {stats?.mySchool ? (
@@ -258,17 +264,16 @@ export default function TerritoryScreen() {
                     우리 학교 · {stats.mySchool.name}
                   </Text>
                   <Text style={styles.myValue}>
-                    {stats.mySchool.area.toFixed(2)}
-                    <Text style={styles.myUnit}> km²</Text>
+                    {areaParts(stats.mySchool.area)[0]}
+                    <Text style={styles.myUnit}> {areaParts(stats.mySchool.area)[1]}</Text>
                   </Text>
                 </View>
                 <View style={styles.myMeta}>
                   <Text style={styles.myRank}>{stats.mySchool.rank}위</Text>
-                  <Text style={styles.cellCount}>라이더 {stats.mySchool.riders}명의 땅 합계</Text>
+                  <Text style={styles.cellCount}>라이더 {stats.mySchool.riders}명</Text>
                 </View>
               </View>
             ) : (
-              // 학교를 등록해야 우리 학교 땅이 보임 (다른 학교 땅은 누구나 볼 수 있음)
               <Pressable style={styles.registerCard} onPress={() => router.push('/profile-settings')}>
                 <Ionicons name="school-outline" size={20} color={ME_COLOR} />
                 <View style={{ flex: 1 }}>
@@ -279,8 +284,8 @@ export default function TerritoryScreen() {
               </Pressable>
             )}
 
-            <Text style={styles.label}>학교 순위 (소속 라이더 땅 합계)</Text>
-            {stats?.schoolTop?.map((r, i) => (
+            {expanded && <Text style={styles.label}>학교 순위</Text>}
+            {expanded && stats?.schoolTop?.map((r, i) => (
               <View key={r.name} style={styles.leaderRow}>
                 <Text style={styles.leaderRank}>{i + 1}</Text>
                 <View style={[styles.swatch, { backgroundColor: r.color }]} />
@@ -289,17 +294,17 @@ export default function TerritoryScreen() {
                   {r.mine ? ' (우리 학교)' : ''}
                   <Text style={styles.riders}> · {r.riders}명</Text>
                 </Text>
-                <Text style={styles.leaderKm}>{r.area.toFixed(1)}km²</Text>
+                <Text style={styles.leaderKm}>{formatArea(r.area)}</Text>
               </View>
             ))}
-            {stats?.mySchool && !mySchoolInTop && (
+            {expanded && stats?.mySchool && !mySchoolInTop && (
               <View style={[styles.leaderRow, styles.myLeaderRow]}>
                 <Text style={styles.leaderRank}>{stats.mySchool.rank}</Text>
                 <View style={[styles.swatch, { backgroundColor: ME_COLOR }]} />
                 <Text style={[styles.leaderName, styles.meText]} numberOfLines={1}>
                   {stats.mySchool.name} (우리 학교)
                 </Text>
-                <Text style={styles.leaderKm}>{stats.mySchool.area.toFixed(1)}km²</Text>
+                <Text style={styles.leaderKm}>{formatArea(stats.mySchool.area)}</Text>
               </View>
             )}
           </>
@@ -309,20 +314,20 @@ export default function TerritoryScreen() {
               <View>
                 <Text style={styles.label}>내 땅</Text>
                 <Text style={styles.myValue}>
-                  {stats ? stats.myArea.toFixed(2) : '—'}
-                  <Text style={styles.myUnit}> km²</Text>
+                  {stats ? areaParts(stats.myArea)[0] : '—'}
+                  <Text style={styles.myUnit}> {stats ? areaParts(stats.myArea)[1] : 'km²'}</Text>
                 </Text>
               </View>
               <View style={styles.myMeta}>
                 <Text style={styles.myRank}>{stats ? `${stats.myRank}위` : '—'}</Text>
                 <Text style={styles.cellCount}>
-                  {stats ? `한 바퀴 ${stats.myLoops ?? 0} · 직선 ${stats.myLines ?? 0}` : ''}
+                  {stats ? `영역 ${stats.myCount ?? 0}곳` : ''}
                 </Text>
               </View>
             </View>
 
-            <Text style={styles.label}>수도권 순위</Text>
-            {stats?.top.map((r, i) => (
+            {expanded && <Text style={styles.label}>순위</Text>}
+            {expanded && stats?.top.map((r, i) => (
               <View key={r.name} style={styles.leaderRow}>
                 <Text style={styles.leaderRank}>{i + 1}</Text>
                 <View style={[styles.swatch, { backgroundColor: r.color }]} />
@@ -330,31 +335,40 @@ export default function TerritoryScreen() {
                   {r.name}
                   {r.me ? ' (나)' : ''}
                 </Text>
-                <Text style={styles.leaderKm}>{r.area.toFixed(1)}km²</Text>
+                <Text style={styles.leaderKm}>{formatArea(r.area)}</Text>
               </View>
             ))}
-            {stats && !myInTop && (
+            {expanded && stats && !myInTop && (
               <View style={[styles.leaderRow, styles.myLeaderRow]}>
                 <Text style={styles.leaderRank}>{stats.myRank}</Text>
                 <View style={[styles.swatch, { backgroundColor: ME_COLOR }]} />
                 <Text style={[styles.leaderName, styles.meText]} numberOfLines={1}>
                   {profile.nickname} (나)
                 </Text>
-                <Text style={styles.leaderKm}>{stats.myArea.toFixed(1)}km²</Text>
+                <Text style={styles.leaderKm}>{formatArea(stats.myArea)}</Text>
               </View>
             )}
           </>
         )}
-        <Text style={styles.credit}>
-          한 바퀴 돌면 안쪽 전체, 쭉 달리면 길 폭 100m가 내 땅 · 누르면 주인이 보여요 · 길
-          데이터 © OpenStreetMap 기여자
-        </Text>
+        {expanded && <Text style={styles.credit}>© OpenStreetMap</Text>}
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  locateButton: {
+    position: 'absolute',
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(10,10,10,0.9)',
+    borderWidth: 1,
+    borderColor: '#3A3A3A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   container: {
     flex: 1,
     backgroundColor: '#000',
@@ -367,8 +381,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     gap: 8,
   },
+  handle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingBottom: 2,
+  },
+  handleBar: {
+    position: 'absolute',
+    top: -2,
+    width: 36,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: '#3A3A3A',
+  },
+  handleText: {
+    color: '#8A8A8A',
+    fontSize: 11,
+    marginTop: 6,
+  },
   modeToggle: {
-    alignSelf: 'flex-start',
     flexDirection: 'row',
     padding: 3,
     borderRadius: 100,
@@ -436,52 +469,14 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.9)',
     textShadowRadius: 4,
   },
-  liveBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 100,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-  },
-  liveDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#FF3B30',
-  },
-  liveText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  toast: {
-    alignSelf: 'flex-start',
-    maxWidth: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.82)',
-  },
-  toastAlert: {
-    borderWidth: 1,
-    borderColor: '#FF5A5F',
-  },
-  toastText: {
-    flexShrink: 1,
-    color: '#FFFFFF',
-    fontSize: 12,
-  },
   panel: {
     position: 'absolute',
     left: 12,
     right: 12,
     bottom: 12,
-    padding: 14,
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 12,
     gap: 7,
     borderRadius: 16,
     borderWidth: 1,

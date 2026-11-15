@@ -14,20 +14,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SchoolPicker } from '@/components/school-picker';
 import { GRADES, schoolLevelOf } from '@/constants/schools';
-import { DEFAULT_PROFILE, saveProfile } from '@/hooks/use-profile';
+import { authErrorText } from '@/hooks/use-auth';
+import { isNicknameAvailable } from '@/hooks/use-profile';
+import { supabase } from '@/lib/supabase';
 
 const ORANGE = '#FFA51F';
 const NICKNAME_MIN = 2;
 const NICKNAME_MAX = 12;
+const PASSWORD_MIN = 6;
 const STEPS = 3;
-
-// 예시용: 학교 이름으로 항상 같은 '우리 학교 라이더 수 / 학교 순위'를 만듦
-function sampleSchoolStats(name: string) {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  h = Math.abs(h);
-  return { riders: 12 + (h % 140), rank: 1 + ((h >> 3) % 60) };
-}
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function SignupScreen() {
   const [step, setStep] = useState(1);
@@ -35,34 +31,67 @@ export default function SignupScreen() {
   const [schoolRegion, setSchoolRegion] = useState('');
   const [grade, setGrade] = useState('');
   const [nickname, setNickname] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [password2, setPassword2] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // 이메일 인증이 켜져 있어 바로 로그인되지 않은 경우
+  const [checkMail, setCheckMail] = useState(false);
 
   const level = schoolLevelOf(school);
   const grades = GRADES[level];
   const nick = nickname.trim();
   const nickError =
     nick.length > 0 && nick.length < NICKNAME_MIN ? `닉네임은 ${NICKNAME_MIN}자 이상이에요` : null;
-  const canSubmit = !!school && !!grade && nick.length >= NICKNAME_MIN && !saving;
+  const canNext = !!school && !!grade && nick.length >= NICKNAME_MIN && !saving;
+  const emailOk = EMAIL_RE.test(email.trim());
+  const pwError =
+    password.length > 0 && password.length < PASSWORD_MIN
+      ? `비밀번호는 ${PASSWORD_MIN}자 이상이에요`
+      : password2.length > 0 && password !== password2
+        ? '비밀번호가 서로 달라요'
+        : null;
+  const canSubmit = emailOk && password.length >= PASSWORD_MIN && password === password2 && !saving;
 
   const back = () => {
-    if (step === 1 || step === 3) router.back();
+    setError(null);
+    if (step === 1 || checkMail) router.back();
     else setStep(step - 1);
+  };
+
+  const next = async () => {
+    if (!canNext) return;
+    setSaving(true);
+    setError(null);
+    const ok = await isNicknameAvailable(nick);
+    setSaving(false);
+    if (!ok) setError('이미 사용 중인 닉네임이에요');
+    else setStep(3);
   };
 
   const submit = async () => {
     if (!canSubmit) return;
     setSaving(true);
-    await saveProfile({ ...DEFAULT_PROFILE, nickname: nick, school, grade });
+    setError(null);
+    const { data, error: e } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: { data: { nickname: nick, school_name: school, school_region: schoolRegion, grade } },
+    });
     setSaving(false);
-    setStep(3);
+    if (e) {
+      setError(e.message.includes('Database error') ? '이미 사용 중인 닉네임이에요' : authErrorText(e.message));
+      return;
+    }
+    // 바로 로그인되면 메인 화면으로 자동 이동, 아니면 메일 확인 안내
+    if (!data.session) setCheckMail(true);
   };
-
-  const stats = sampleSchoolStats(school);
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        {step < 3 ? (
+        {!checkMail ? (
           <Pressable onPress={back} hitSlop={10}>
             <Ionicons name="chevron-back" size={26} color="#FFFFFF" />
           </Pressable>
@@ -140,7 +169,67 @@ export default function SignupScreen() {
             maxLength={NICKNAME_MAX}
             autoCorrect={false}
           />
-          {nickError && <Text style={styles.error}>{nickError}</Text>}
+          {(nickError || error) && <Text style={styles.error}>{nickError || error}</Text>}
+
+          <View style={{ flex: 1 }} />
+          <Pressable
+            onPress={next}
+            disabled={!canNext}
+            style={({ pressed }) => [
+              styles.primary,
+              !canNext && styles.primaryDisabled,
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Text style={styles.primaryText}>{saving ? '확인 중…' : '다음'}</Text>
+          </Pressable>
+        </KeyboardAvoidingView>
+      )}
+
+      {step === 3 && !checkMail && (
+        <KeyboardAvoidingView
+          style={styles.body}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Text style={styles.title}>로그인에 쓸 계정을 만들어요</Text>
+
+          <Text style={styles.label}>이메일</Text>
+          <TextInput
+            value={email}
+            onChangeText={setEmail}
+            placeholder="you@example.com"
+            placeholderTextColor="#6A6A6A"
+            style={styles.input}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="email"
+            textContentType="emailAddress"
+          />
+
+          <Text style={styles.label}>비밀번호</Text>
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            placeholder={`${PASSWORD_MIN}자 이상`}
+            placeholderTextColor="#6A6A6A"
+            style={styles.input}
+            secureTextEntry
+            autoCapitalize="none"
+            autoComplete="new-password"
+            textContentType="newPassword"
+          />
+          <TextInput
+            value={password2}
+            onChangeText={setPassword2}
+            placeholder="비밀번호 확인"
+            placeholderTextColor="#6A6A6A"
+            style={styles.input}
+            secureTextEntry
+            autoCapitalize="none"
+            onSubmitEditing={submit}
+          />
+          {(pwError || error) && <Text style={styles.error}>{pwError || error}</Text>}
 
           <View style={{ flex: 1 }} />
           <Pressable
@@ -157,35 +246,22 @@ export default function SignupScreen() {
         </KeyboardAvoidingView>
       )}
 
-      {step === 3 && (
+      {checkMail && (
         <View style={[styles.body, styles.done]}>
           <View style={styles.doneIcon}>
-            <Ionicons name="checkmark" size={44} color="#000" />
+            <Ionicons name="mail" size={40} color="#000" />
           </View>
-          <Text style={styles.doneTitle}>가입 완료!</Text>
+          <Text style={styles.doneTitle}>메일을 확인해 주세요</Text>
           <Text style={styles.doneSub}>
-            {school} {grade} {nick}님,{'\n'}학교 대표 라이더가 되어 보세요
+            {email.trim()}로 보낸 인증 링크를 누르면{'\n'}가입이 끝나요. 그다음 로그인해 주세요.
           </Text>
-
-          <View style={styles.statsCard}>
-            <View style={styles.statBox}>
-              <Text style={styles.statValue}>{stats.riders}명</Text>
-              <Text style={styles.statLabel}>우리 학교 라이더</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statBox}>
-              <Text style={styles.statValue}>{stats.rank}위</Text>
-              <Text style={styles.statLabel}>학교 랭킹</Text>
-            </View>
-          </View>
-          <Text style={styles.sample}>예시 데이터 (가상)</Text>
 
           <View style={{ flex: 1 }} />
           <Pressable
-            onPress={() => router.replace('/(tabs)')}
+            onPress={() => router.replace('/login')}
             style={({ pressed }) => [styles.primary, pressed && { opacity: 0.85 }]}
           >
-            <Text style={styles.primaryText}>라이딩 시작하기</Text>
+            <Text style={styles.primaryText}>로그인 화면으로</Text>
           </Pressable>
         </View>
       )}
@@ -359,37 +435,5 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     lineHeight: 22,
-  },
-  statsCard: {
-    flexDirection: 'row',
-    alignSelf: 'stretch',
-    marginTop: 16,
-    paddingVertical: 18,
-    borderRadius: 16,
-    backgroundColor: '#0D0D0D',
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-  },
-  statBox: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
-  },
-  statDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: '#3A3A3A',
-  },
-  statValue: {
-    color: ORANGE,
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  statLabel: {
-    color: '#BDBDBD',
-    fontSize: 12,
-  },
-  sample: {
-    color: '#6A6A6A',
-    fontSize: 11,
   },
 });

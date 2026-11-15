@@ -119,8 +119,8 @@ export default function ProfileSettingsScreen() {
         bio: draft.bio.trim(),
       });
       router.back();
-    } catch {
-      Alert.alert('저장 실패', '프로필을 저장하지 못했어요. 다시 시도해 주세요.');
+    } catch (e) {
+      Alert.alert('저장 실패', e instanceof Error ? e.message : '프로필을 저장하지 못했어요. 다시 시도해 주세요.');
       setSaving(false);
     }
   };
@@ -181,7 +181,7 @@ export default function ProfileSettingsScreen() {
               </Text>
               {draft.school ? (
                 <Pressable
-                  onPress={() => setDraft((d) => ({ ...d, school: '', grade: '' }))}
+                  onPress={() => setDraft((d) => ({ ...d, school: '', schoolRegion: '', grade: '' }))}
                   hitSlop={10}
                 >
                   <Text style={styles.unregister}>등록 해제</Text>
@@ -240,8 +240,13 @@ export default function ProfileSettingsScreen() {
           <View style={styles.pickerBody}>
             <SchoolPicker
               selected={draft.school}
-              onSelect={({ name }) => {
-                setDraft((d) => ({ ...d, school: name, grade: name === d.school ? d.grade : '' }));
+              onSelect={({ name, region }) => {
+                setDraft((d) => ({
+                  ...d,
+                  school: name,
+                  schoolRegion: region,
+                  grade: name === d.school ? d.grade : '',
+                }));
                 setPickingSchool(false);
               }}
             />
